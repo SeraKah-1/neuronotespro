@@ -1,0 +1,328 @@
+
+<!DOCTYPE html>
+<html lang="en">
+  <head>
+    <meta charset="UTF-8" />
+    <link rel="icon" type="image/svg+xml" href="https://lucide.dev/icons/brain-circuit.svg" />
+    <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+    <title>NeuroNote AI</title>
+    <script src="https://cdn.tailwindcss.com"></script>
+    <script src="https://cdnjs.cloudflare.com/ajax/libs/html2pdf.js/0.10.1/html2pdf.bundle.min.js"></script>
+    <script>
+      tailwind.config = {
+        darkMode: 'class',
+        theme: {
+          extend: {
+            colors: {
+              neuro: {
+                bg: 'var(--ui-bg)',       
+                surface: 'var(--ui-surface)',  
+                primary: 'var(--ui-primary)',
+                text: 'var(--ui-text-main)',     
+                textMuted: 'var(--ui-text-muted)', 
+              }
+            },
+            fontFamily: {
+              sans: ['Inter', 'sans-serif'],
+              mono: ['JetBrains Mono', 'monospace'],
+              serif: ['Merriweather', 'serif'],
+            },
+            animation: {
+              'fade-in': 'fadeIn 0.4s ease-out',
+              'slide-up': 'slideUp 0.4s cubic-bezier(0.16, 1, 0.3, 1)',
+              'scale-in': 'scaleIn 0.2s ease-out',
+            },
+            keyframes: {
+              fadeIn: {
+                '0%': { opacity: '0' },
+                '100%': { opacity: '1' },
+              },
+              slideUp: {
+                '0%': { transform: 'translateY(20px)', opacity: '0' },
+                '100%': { transform: 'translateY(0)', opacity: '1' },
+              },
+              scaleIn: {
+                '0%': { transform: 'scale(0.95)', opacity: '0' },
+                '100%': { transform: 'scale(1)', opacity: '1' },
+              }
+            }
+          }
+        }
+      }
+    </script>
+    <link href="https://fonts.googleapis.com/css2?family=Inter:wght@300;400;500;600;700;800&family=JetBrains+Mono:wght@400;500&family=Merriweather:ital,wght@0,300;0,400;0,700;1,400&display=swap" rel="stylesheet">
+    <link rel="stylesheet" href="https://cdn.jsdelivr.net/npm/katex@0.16.9/dist/katex.min.css" integrity="sha384-n8MVd4RsNIU0tAv4ct0nTaAbDJwPJzDEaqSD1odI+WdtXRGWt2kTvGFasHpSy3SV" crossorigin="anonymous">
+    <style>
+      body {
+        background-color: var(--ui-bg);
+        margin: 0;
+        font-family: 'Inter', sans-serif;
+        -webkit-font-smoothing: antialiased;
+        -moz-osx-font-smoothing: grayscale;
+        overflow: hidden; /* App handles scroll */
+      }
+      
+      /* UTILS */
+      .glass-panel {
+        background: rgba(255, 255, 255, 0.7);
+        backdrop-filter: blur(12px);
+        -webkit-backdrop-filter: blur(12px);
+        border: 1px solid rgba(255, 255, 255, 0.3);
+      }
+      
+      .custom-scrollbar::-webkit-scrollbar { width: 5px; height: 5px; }
+      .custom-scrollbar::-webkit-scrollbar-track { background: transparent; }
+      .custom-scrollbar::-webkit-scrollbar-thumb { background: rgba(0,0,0,0.1); border-radius: 10px; }
+      .custom-scrollbar::-webkit-scrollbar-thumb:hover { background: rgba(0,0,0,0.2); }
+      
+      .no-scrollbar::-webkit-scrollbar { display: none; }
+      .no-scrollbar { -ms-overflow-style: none; scrollbar-width: none; }
+
+      /* ============================================================
+         GLOBAL THEME SYSTEM (Refined)
+         ============================================================ */
+
+      /* 1. CLINICAL CLEAN (Warmer, Softer) */
+      .theme-clinical_clean {
+        --ui-bg: #f9fafb; /* Slightly off-white */
+        --ui-sidebar: #ffffff;
+        --ui-sidebar-secondary: #f3f4f6;
+        --ui-border: #e5e7eb;
+        --ui-text-main: #111827;
+        --ui-text-muted: #6b7280;
+        --ui-primary: #2563eb;
+        --ui-primary-glow: rgba(37, 99, 235, 0.08);
+        --ui-surface: #ffffff;
+        --ui-shadow: 0 4px 20px -2px rgba(0,0,0,0.05);
+        
+        --md-bg: #ffffff;
+        --md-text: #374151;
+        --md-heading: #111827;
+        --md-border: #f3f4f6; /* Softer border for content */
+        --md-accent: #2563eb;
+        --md-code-bg: #f9fafb;
+        --md-quote-border: #2563eb;
+        --md-table-head: #f9fafb;
+        --md-table-stripe: #f9fafb;
+        --md-callout-bg: #f8fafc;
+        --md-font-body: 'Merriweather', serif; /* Use Serif for reading comfort */
+        --md-font-head: 'Inter', sans-serif;
+      }
+
+      /* 2. ACADEMIC PAPER (Monochrome) */
+      .theme-academic_paper {
+        --ui-bg: #fdfdfd; 
+        --ui-sidebar: #f4f4f5;
+        --ui-sidebar-secondary: #fafafa;
+        --ui-border: #e4e4e7; 
+        --ui-text-main: #18181b; 
+        --ui-text-muted: #71717a; 
+        --ui-primary: #18181b; 
+        --ui-primary-glow: rgba(0, 0, 0, 0.04);
+        --ui-surface: #ffffff;
+        --ui-shadow: 0 2px 10px rgba(0,0,0,0.03);
+
+        --md-bg: #ffffff;
+        --md-text: #27272a;
+        --md-heading: #09090b;
+        --md-border: #f4f4f5;
+        --md-accent: #18181b;
+        --md-code-bg: #fafafa;
+        --md-quote-border: #27272a;
+        --md-table-head: #fafafa;
+        --md-table-stripe: #fafafa;
+        --md-callout-bg: #fafafa;
+        --md-font-body: 'Times New Roman', serif;
+        --md-font-head: 'Arial', sans-serif;
+      }
+
+      /* 3. SEPIA FOCUS (Warm/Late Night) */
+      .theme-sepia_focus {
+        --ui-bg: #fdf6e3;
+        --ui-sidebar: #eee8d5;
+        --ui-sidebar-secondary: #fdf6e3;
+        --ui-border: #d3cbb7;
+        --ui-text-main: #5f4b32;
+        --ui-text-muted: #93a1a1;
+        --ui-primary: #b58900;
+        --ui-primary-glow: rgba(181, 137, 0, 0.1);
+        --ui-surface: #fdf6e3;
+        --ui-shadow: 0 4px 15px rgba(95, 75, 50, 0.05);
+
+        --md-bg: #fdf6e3;
+        --md-text: #5f4b32;
+        --md-heading: #3e2d1e;
+        --md-border: #eaddcf;
+        --md-accent: #b58900;
+        --md-code-bg: #eee8d5;
+        --md-quote-border: #d3cbb7;
+        --md-table-head: #eee8d5;
+        --md-table-stripe: #fcf5e6;
+        --md-callout-bg: rgba(181, 137, 0, 0.05);
+        --md-font-body: 'Merriweather', serif;
+        --md-font-head: 'Inter', sans-serif;
+      }
+
+
+      /* ============================================================
+         MARKDOWN BODY STYLES (Typography Upgrade)
+         ============================================================ */
+
+      .markdown-body {
+        font-family: var(--md-font-body) !important;
+        background-color: var(--md-bg) !important;
+        color: var(--md-text) !important;
+        padding: 60px 80px; /* More whitespace */
+        border-radius: 0px; /* Clean sheet look */
+        min-height: 100%;
+        border: none;
+        max-width: 800px; /* Optimal reading width */
+        margin: 0 auto;
+      }
+
+      /* Headings */
+      .markdown-body h1, .markdown-body h2, .markdown-body h3, .markdown-body h4 { font-family: var(--md-font-head); letter-spacing: -0.02em; }
+      .markdown-body h1 { color: var(--md-heading) !important; font-size: 2.5em !important; font-weight: 800 !important; border-bottom: none; margin-bottom: 1.5em; line-height: 1.1; }
+      .markdown-body h2 { color: var(--md-heading) !important; font-size: 1.75em !important; font-weight: 700 !important; margin-top: 2em; margin-bottom: 0.8em; padding-left: 0; border-left: none; }
+      .markdown-body h3 { color: var(--md-accent) !important; font-size: 1.25em !important; font-weight: 600 !important; margin-top: 1.5em; opacity: 0.9; }
+      
+      /* Body Text */
+      .markdown-body p, .markdown-body li { 
+        font-size: 17px; 
+        line-height: 1.75; /* Comfortable reading */
+        color: var(--md-text) !important; 
+        margin-bottom: 1.2em; 
+      }
+      
+      .markdown-body strong { font-weight: 700; color: var(--md-heading) !important; background: linear-gradient(to bottom, transparent 60%, var(--ui-primary-glow) 60%); padding: 0 2px; }
+      
+      /* Callouts (Refined) */
+      .markdown-body .callout { 
+        background-color: var(--md-callout-bg) !important; 
+        border: none !important;
+        border-left: 3px solid var(--md-border) !important; 
+        border-radius: 6px !important; 
+        margin: 2em 0 !important; 
+        box-shadow: 0 2px 5px rgba(0,0,0,0.02);
+      }
+      .markdown-body .callout-title { 
+        font-family: var(--md-font-head);
+        font-weight: 600 !important; 
+        padding: 10px 16px !important; 
+        border-bottom: none !important; 
+        background-color: transparent; 
+        font-size: 0.85em;
+      }
+      .markdown-body .callout-content { padding: 4px 16px 16px 16px; font-size: 0.95em; }
+      
+      /* Specific Callout Colors */
+      .callout-info { border-left-color: var(--md-accent) !important; background-color: rgba(37, 99, 235, 0.02) !important; }
+      .callout-info .callout-title { color: var(--md-accent) !important; }
+      
+      .callout-tip { border-left-color: #10b981 !important; background-color: rgba(16, 185, 129, 0.02) !important; }
+      .callout-tip .callout-title { color: #10b981 !important; }
+      
+      .callout-danger { border-left-color: #ef4444 !important; background-color: rgba(239, 68, 68, 0.02) !important; }
+      .callout-danger .callout-title { color: #ef4444 !important; }
+
+      /* Tables */
+      .markdown-body table { width: 100%; border-collapse: separate; border-spacing: 0; margin: 2em 0; font-size: 0.9em; border: 1px solid var(--md-border); border-radius: 8px; overflow: hidden; }
+      .markdown-body th { background-color: var(--md-table-head) !important; color: var(--md-heading) !important; font-weight: 600; padding: 12px 16px; border-bottom: 1px solid var(--md-border); text-align: left; font-family: var(--md-font-head); }
+      .markdown-body td { border-bottom: 1px solid var(--md-border); padding: 12px 16px; color: var(--md-text) !important; }
+      .markdown-body tr:last-child td { border-bottom: none; }
+
+      /* Code */
+      .markdown-body code { font-family: 'JetBrains Mono', monospace; background-color: var(--md-code-bg); color: var(--md-heading); padding: 0.2em 0.4em; border-radius: 4px; font-size: 0.85em; border: 1px solid var(--md-border); }
+      .markdown-body pre code { background-color: transparent; border: none; padding: 0; }
+
+      /* Mermaid Container */
+      .mermaid-container {
+        background-color: var(--ui-surface) !important;
+        border: 1px solid var(--md-border);
+        border-radius: 12px;
+        margin: 2em 0;
+        padding: 30px;
+        box-shadow: var(--ui-shadow);
+      }
+
+      /* Sensor Blur (Active Recall) - REFINED */
+      .sensor-blur { 
+        filter: blur(6px); 
+        opacity: 0.3; 
+        background: inherit; 
+        cursor: pointer; 
+        transition: all 0.4s ease; 
+        user-select: none;
+      }
+      .sensor-blur:hover { 
+        filter: blur(3px); 
+        opacity: 0.6; 
+      }
+      .sensor-blur.revealed {
+        filter: none;
+        opacity: 1;
+      }
+
+      /* ============================================================
+         PDF EXPORT RESPONSIVE FIXES (Force SVG Scaling)
+         ============================================================ */
+      
+      .print-mode {
+          width: 800px !important; /* Force A4-ish width context */
+          max-width: 800px !important;
+          margin: 0 auto !important;
+          background-color: white !important;
+          color: black !important;
+      }
+
+      .print-mode .mermaid-container {
+          width: 100% !important;
+          max-width: 100% !important;
+          overflow: visible !important;
+          display: flex !important;
+          justify-content: center !important;
+          background-color: white !important;
+          border: none !important;
+          box-shadow: none !important;
+          margin: 10px 0 !important;
+          padding: 0 !important;
+      }
+
+      .print-mode .mermaid-container svg {
+          width: 100% !important;
+          max-width: 100% !important;
+          height: auto !important;
+          /* Critical for arrows not getting cut off */
+          overflow: visible !important; 
+      }
+
+      @media (max-width: 640px) { 
+        .markdown-body { padding: 30px 20px; font-size: 16px; } 
+        .markdown-body h1 { font-size: 2em !important; } 
+      }
+    </style>
+  <script type="importmap">
+{
+  "imports": {
+    "react-markdown": "https://esm.sh/react-markdown@^10.1.0",
+    "react-dom/": "https://esm.sh/react-dom@^19.2.4/",
+    "react/": "https://esm.sh/react@^19.2.4/",
+    "react": "https://esm.sh/react@^19.2.4",
+    "@google/genai": "https://esm.sh/@google/genai@^1.40.0",
+    "@supabase/supabase-js": "https://esm.sh/@supabase/supabase-js@^2.39.0",
+    "lucide-react": "https://esm.sh/lucide-react@^0.563.0",
+    "mermaid": "https://esm.sh/mermaid@^11.12.2",
+    "remark-gfm": "https://esm.sh/remark-gfm@^4.0.1",
+    "remark-math": "https://esm.sh/remark-math@6.0.0",
+    "rehype-katex": "https://esm.sh/rehype-katex@7.0.0",
+    "groq-sdk": "https://esm.sh/groq-sdk@0.7.0"
+  }
+}
+</script>
+<link rel="stylesheet" href="/index.css">
+</head>
+  <body>
+    <div id="root"></div>
+  <script type="module" src="/index.tsx"></script>
+</body>
+</html>
