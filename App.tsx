@@ -375,7 +375,7 @@ const AppContent: React.FC = () => {
   if (!isAuthenticated) { return <LoginGate onUnlock={handleAuthUnlock} />; }
 
   return (
-    <div className={`min-h-screen flex font-sans overflow-hidden transition-colors duration-300 theme-${currentTheme} bg-[var(--ui-bg)] text-[var(--ui-text-main)]`}>
+    <div className={`h-[100dvh] flex font-sans overflow-hidden transition-colors duration-300 theme-${currentTheme} bg-[var(--ui-bg)] text-[var(--ui-text-main)]`}>
       
       <CommandPalette 
         isOpen={showPalette} 
@@ -389,7 +389,7 @@ const AppContent: React.FC = () => {
       />
 
       {/* --- 1. PRIMARY SIDEBAR (Desktop: Icon Strip, Mobile: Hidden) --- */}
-      <aside className={`hidden md:flex w-[70px] h-screen bg-[var(--ui-sidebar)] border-r border-[var(--ui-border)] flex-col items-center py-6 shrink-0 z-40 transition-all ${focusMode ? '-translate-x-full absolute' : 'relative'}`}>
+      <aside className={`hidden md:flex w-[70px] h-full bg-[var(--ui-sidebar)] border-r border-[var(--ui-border)] flex-col items-center py-6 shrink-0 z-40 transition-all ${focusMode ? '-translate-x-full absolute' : 'relative'}`}>
          <div className="mb-8">
              <div className="w-10 h-10 bg-[var(--ui-primary)] rounded-xl flex items-center justify-center shadow-lg shadow-[var(--ui-primary)]/20">
                  <BrainCircuit className="text-white" size={22} />
@@ -409,32 +409,32 @@ const AppContent: React.FC = () => {
          </div>
       </aside>
 
-      {/* --- 2. SECONDARY SIDEBAR (Desktop: File Tree, Mobile: Slide-over) --- */}
+      {/* --- 2. SECONDARY SIDEBAR (Laptop: File Tree, Tablet/Mobile: Slide-over) --- */}
       <aside className={`
-          w-[280px] h-screen bg-[var(--ui-sidebar-secondary)] border-r border-[var(--ui-border)] flex flex-col transition-all duration-300 z-30
-          fixed md:relative left-0 top-0 bottom-0
-          ${(focusMode || navCollapsed) ? 'md:w-0 md:opacity-0 md:overflow-hidden' : 'md:w-[280px] md:opacity-100'}
-          ${mobileMenuOpen ? 'translate-x-0 shadow-2xl' : '-translate-x-full md:translate-x-0'}
+          w-[280px] h-full bg-[var(--ui-sidebar-secondary)] border-r border-[var(--ui-border)] flex flex-col transition-all duration-300 z-30
+          fixed lg:relative left-0 top-0 bottom-0
+          ${(focusMode || navCollapsed) ? 'lg:w-0 lg:opacity-0 lg:overflow-hidden' : 'lg:w-[280px] lg:opacity-100'}
+          ${mobileMenuOpen ? 'translate-x-0 shadow-2xl' : '-translate-x-full lg:translate-x-0'}
       `}>
           <div className="p-4 flex items-center justify-between border-b border-[var(--ui-border)] bg-[var(--ui-sidebar)] h-[60px] shrink-0">
               <h3 className="font-bold text-sm text-[var(--ui-text-main)] uppercase tracking-wider">Explorer</h3>
-              {/* Close button for Mobile */}
-              <button onClick={() => setMobileMenuOpen(false)} className="md:hidden text-[var(--ui-text-muted)] hover:text-[var(--ui-text-main)]"><X size={18}/></button>
-              {/* Collapse button for Desktop */}
-              <button onClick={() => setNavCollapsed(true)} className="hidden md:block text-[var(--ui-text-muted)] hover:text-[var(--ui-text-main)]"><ArrowLeftFromLine size={16}/></button>
+              {/* Close button for Mobile/Tablet */}
+              <button onClick={() => setMobileMenuOpen(false)} className="lg:hidden text-[var(--ui-text-muted)] hover:text-[var(--ui-text-main)]"><X size={18}/></button>
+              {/* Collapse button for Laptop */}
+              <button onClick={() => setNavCollapsed(true)} className="hidden lg:block text-[var(--ui-text-muted)] hover:text-[var(--ui-text-main)]"><ArrowLeftFromLine size={16}/></button>
           </div>
           <div className="flex-1 overflow-hidden p-2">
               <FileSystem onSelectNote={handleSelectNoteFromFileSystem} activeNoteId={appState.activeNoteId} />
           </div>
       </aside>
       
-      {/* Mobile Overlay for Sidebar */}
-      {mobileMenuOpen && <div className="fixed inset-0 bg-black/50 z-20 md:hidden" onClick={() => setMobileMenuOpen(false)}></div>}
+      {/* Mobile/Tablet Overlay for Sidebar */}
+      {mobileMenuOpen && <div className="fixed inset-0 bg-black/50 z-20 lg:hidden" onClick={() => setMobileMenuOpen(false)}></div>}
 
       {/* --- 3. MAIN CANVAS --- */}
-      <main className="flex-1 relative h-screen overflow-hidden flex flex-col bg-[var(--ui-bg)]">
+      <main className="flex-1 relative h-full overflow-hidden flex flex-col bg-[var(--ui-bg)]">
          
-         {/* MOBILE HEADER */}
+         {/* MOBILE HEADER (< md) */}
          <div className="md:hidden h-14 bg-[var(--ui-sidebar)] border-b border-[var(--ui-border)] flex items-center justify-between px-4 shrink-0 z-20">
              <div className="flex items-center gap-3">
                  <button onClick={() => setMobileMenuOpen(true)} className="text-[var(--ui-text-main)]"><Menu size={20}/></button>
@@ -443,9 +443,17 @@ const AppContent: React.FC = () => {
              <button onClick={() => setShowPalette(true)} className="p-2 text-[var(--ui-text-muted)]"><Command size={18}/></button>
          </div>
 
-         {/* Collapsed Nav Toggle (Desktop Only) */}
+         {/* TABLET HEADER / TRIGGER (md only) */}
+         <div className="hidden md:flex lg:hidden h-14 border-b border-[var(--ui-border)] items-center justify-between px-4 shrink-0 bg-[var(--ui-bg)]">
+             <button onClick={() => setMobileMenuOpen(true)} className="flex items-center gap-2 text-[var(--ui-text-muted)] hover:text-[var(--ui-text-main)] font-bold text-xs uppercase tracking-wider">
+                 <Menu size={18}/> Explorer
+             </button>
+             <span className="font-bold text-[var(--ui-text-main)] flex items-center gap-2 opacity-50"><BrainCircuit size={16}/> NeuroNote</span>
+         </div>
+
+         {/* Collapsed Nav Toggle (Laptop Only) */}
          {navCollapsed && !focusMode && (
-             <button onClick={() => setNavCollapsed(false)} className="hidden md:block absolute top-4 left-4 z-50 p-2 bg-[var(--ui-surface)] border border-[var(--ui-border)] rounded-lg shadow-sm text-[var(--ui-text-muted)] hover:text-[var(--ui-text-main)]">
+             <button onClick={() => setNavCollapsed(false)} className="hidden lg:block absolute top-4 left-4 z-50 p-2 bg-[var(--ui-surface)] border border-[var(--ui-border)] rounded-lg shadow-sm text-[var(--ui-text-muted)] hover:text-[var(--ui-text-main)]">
                  <ArrowRightFromLine size={16}/>
              </button>
          )}

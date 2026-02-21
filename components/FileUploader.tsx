@@ -1,8 +1,9 @@
 
 import React, { useRef, useState } from 'react';
 import { Upload, X, FileText, File as FileIcon, Image as ImageIcon, Link, Globe, CloudLightning, Presentation, FileType } from 'lucide-react';
-import { UploadedFile } from '../types';
+import { UploadedFile, GenerationConfig, AIProvider, NoteMode, StorageType } from '../types';
 import { extractTextFromFile } from '../utils/pdfExtractor';
+import { processPPTWithGemini } from '../services/pptService';
 
 interface FileUploaderProps {
   files: UploadedFile[];
@@ -122,6 +123,37 @@ const FileUploader: React.FC<FileUploaderProps> = ({ files, onFilesChange }) => 
               // Encode text as Base64 to match expected format for "data"
               finalData = btoa(unescape(encodeURIComponent(textContent)));
               mimeType = 'text/plain'; // Correctly mark as text
+          } else if (ext === 'ppt' || ext === 'pptx') {
+              // NEW: PPT Handling via Gemini
+              setStatusMessage(`Analyzing Slides in ${file.name}...`);
+              
+              // Read raw base64 first to send to Gemini
+              const rawBase64 = await readFileAsBase64(file);
+              
+              // Temporary Config for PPT Extraction
+              const tempConfig: GenerationConfig = {
+                  provider: AIProvider.GEMINI,
+                  model: 'gemini-2.5-flash', // Use Flash for vision
+                  temperature: 0.2,
+                  apiKey: process.env.GEMINI_API_KEY || '',
+                  mode: NoteMode.GENERAL,
+                  storageType: StorageType.LOCAL
+              };
+
+              // Create temp file object for service
+              const tempFile: UploadedFile = {
+                  name: file.name,
+                  mimeType: file.type || 'application/vnd.openxmlformats-officedocument.presentationml.presentation',
+                  data: rawBase64
+              };
+
+              // Extract text using Gemini Vision
+              const extractedText = await processPPTWithGemini(tempConfig, tempFile);
+              
+              // Store as text/plain for downstream usage
+              finalData = btoa(unescape(encodeURIComponent(extractedText)));
+              mimeType = 'text/plain';
+
           } else {
               setStatusMessage(`Reading ${file.name}...`);
               finalData = await readFileAsBase64(file);
@@ -129,7 +161,7 @@ const FileUploader: React.FC<FileUploaderProps> = ({ files, onFilesChange }) => 
           
           setUploadProgress(100);
           
-          // Fix MIME types for common issues
+          // Fix MIME types for common issues (if not already handled above)
           if (ext === 'md' || ext === 'txt') mimeType = 'text/plain';
           if (!mimeType && ext === 'ppt') mimeType = 'application/vnd.ms-powerpoint';
           if (!mimeType && ext === 'pptx') mimeType = 'application/vnd.openxmlformats-officedocument.presentationml.presentation';
@@ -144,7 +176,7 @@ const FileUploader: React.FC<FileUploaderProps> = ({ files, onFilesChange }) => 
 
         } catch (err) {
           console.error(`Failed ${file.name}`, err);
-          alert(`Failed to process ${file.name}. If it's a large PDF, try splitting it.`);
+          alert(`Failed to process ${file.name}. Ensure API Key is set for PPTs.`);
         }
       }
       
