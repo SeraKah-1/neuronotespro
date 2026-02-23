@@ -1,6 +1,6 @@
 
 import { createClient, SupabaseClient } from '@supabase/supabase-js';
-import { HistoryItem, Folder, SavedPrompt, SavedQueue, KnowledgeSource, KnowledgeFile, LibraryMaterial } from '../types';
+import { HistoryItem, Folder, SavedPrompt, SavedQueue, LibraryMaterial } from '../types';
 
 // --- INDEXED DB HELPER (Raw Implementation to avoid external deps) ---
 const DB_NAME = 'NeuroNoteDB';
@@ -10,15 +10,11 @@ const STORE_FILES = 'knowledge_files';
 
 class IDBAdapter {
   private db: IDBDatabase | null = null;
-  private initPromise: Promise<void> | null = null;
 
   async init(): Promise<void> {
     if (this.db) return;
-    if (this.initPromise) return this.initPromise;
-
-    this.initPromise = new Promise((resolve, reject) => {
+    return new Promise((resolve, reject) => {
       const request = indexedDB.open(DB_NAME, DB_VERSION);
-      
       request.onupgradeneeded = (event) => {
         const db = (event.target as IDBOpenDBRequest).result;
         if (!db.objectStoreNames.contains(STORE_CONTENT)) {
@@ -28,35 +24,18 @@ class IDBAdapter {
           db.createObjectStore(STORE_FILES); // Key: SourceId_FileId, Value: Blob/Base64
         }
       };
-
       request.onsuccess = (event) => {
         this.db = (event.target as IDBOpenDBRequest).result;
-        
-        // Handle connection closing (e.g. on version change or reload)
-        this.db.onversionchange = () => {
-            this.db?.close();
-            this.db = null;
-            this.initPromise = null;
-        };
-        
         resolve();
       };
-
-      request.onerror = (event) => {
-          console.error("IDB Open Error:", (event.target as IDBOpenDBRequest).error);
-          this.initPromise = null; // Allow retry
-          reject((event.target as IDBOpenDBRequest).error);
-      };
+      request.onerror = (event) => reject(event);
     });
-    
-    return this.initPromise;
   }
 
   async put(storeName: string, key: string, value: any): Promise<void> {
     await this.init();
     return new Promise((resolve, reject) => {
-      if (!this.db) return reject(new Error("Database not initialized"));
-      const tx = this.db.transaction(storeName, 'readwrite');
+      const tx = this.db!.transaction(storeName, 'readwrite');
       const store = tx.objectStore(storeName);
       const req = store.put(value, key);
       req.onsuccess = () => resolve();
@@ -67,8 +46,7 @@ class IDBAdapter {
   async get(storeName: string, key: string): Promise<any> {
     await this.init();
     return new Promise((resolve, reject) => {
-      if (!this.db) return reject(new Error("Database not initialized"));
-      const tx = this.db.transaction(storeName, 'readonly');
+      const tx = this.db!.transaction(storeName, 'readonly');
       const store = tx.objectStore(storeName);
       const req = store.get(key);
       req.onsuccess = () => resolve(req.result);
@@ -79,8 +57,7 @@ class IDBAdapter {
   async delete(storeName: string, key: string): Promise<void> {
     await this.init();
     return new Promise((resolve, reject) => {
-      if (!this.db) return reject(new Error("Database not initialized"));
-      const tx = this.db.transaction(storeName, 'readwrite');
+      const tx = this.db!.transaction(storeName, 'readwrite');
       const store = tx.objectStore(storeName);
       const req = store.delete(key);
       req.onsuccess = () => resolve();
@@ -110,6 +87,8 @@ export class StorageService {
     if (url && key) {
       try {
         this.supabase = createClient(url, key);
+        // Auto-sync on init
+        this.syncWithCloud();
       } catch (e) {
         console.error("Supabase Init Error", e);
       }
@@ -124,7 +103,8 @@ export class StorageService {
   
   // Helper to strip heavy content for LocalStorage
   private stripContent(note: HistoryItem): HistoryItem {
-    return { ...note, content: "" }; 
+    const snippet = note.content ? note.content.substring(0, 200).replace(/[#*`]/g, '') : "";
+    return { ...note, content: "", snippet }; 
   }
 
   // Metadata is fast and synchronous (LocalStorage)
@@ -137,42 +117,34 @@ export class StorageService {
   public async getNoteContent(id: string): Promise<string> {
     let content = await this.idb.get(STORE_CONTENT, id);
     
-    // If missing locally, try fetching from Cloud (Lazy Load)
+    // Fallback: If not in IDB, try Cloud (for synced/cloud notes)
     if (!content && this.supabase) {
-        const { data } = await this.supabase
-            .from('neuro_notes')
-            .select('content')
-            .eq('id', id)
-            .single();
-        
-        if (data && data.content) {
-            content = data.content;
-            // Cache it locally for next time
-            await this.idb.put(STORE_CONTENT, id, content);
+        try {
+            const { data, error } = await this.supabase
+                .from('neuro_notes')
+                .select('content')
+                .eq('id', id)
+                .single();
+            
+            if (data && data.content) {
+                content = data.content;
+                // Cache to IDB for next time
+                await this.idb.put(STORE_CONTENT, id, content);
+            }
+        } catch (e) {
+            console.warn("Failed to fetch content from cloud fallback", e);
         }
     }
     
     return content || "";
   }
 
-  // Returns full notes (Metadata + Content) - Automatically handles cross-device initial sync
+  // Returns full notes (Metadata + Content) - Expensive, use carefully
   public async getUnifiedNotes(): Promise<HistoryItem[]> {
-      let localMeta = this.getLocalNotesMetadata();
-
       if (this.supabase) {
-          if (localMeta.length === 0) {
-              // Device baru (LocalStorage kosong). 
-              // Paksa tunggu sinkronisasi dari Supabase agar UI tidak merender layar kosong.
-              await this.syncNotesFromCloud();
-              localMeta = this.getLocalNotesMetadata(); // Baca ulang setelah LocalStorage diinjeksi data cloud
-          } else {
-              // Device lama (Sudah ada data).
-              // Lemparkan data lokal langsung agar UI responsif, lalu jalankan sync di background.
-              this.syncNotesFromCloud().catch(err => console.error("Background sync failed", err));
-          }
+          await this.syncWithCloud();
       }
-
-      return localMeta;
+      return this.getLocalNotesMetadata();
   }
   
   // NEW: Get content for multiple IDs (for Context Injection)
@@ -202,25 +174,6 @@ export class StorageService {
       return results;
   }
 
-  // Helper to map Context IDs <-> Tags
-  private mapContextToTags(note: HistoryItem): string[] {
-      const tags = note.tags ? [...note.tags] : [];
-      // Remove old context tags to avoid dupes
-      const cleanTags = tags.filter(t => !t.startsWith('ctx:'));
-      
-      if (note.attached_context_ids) {
-          note.attached_context_ids.forEach(id => {
-              cleanTags.push(`ctx:${id}`);
-          });
-      }
-      return cleanTags;
-  }
-
-  private mapTagsToContext(tags: string[]): string[] {
-      if (!tags) return [];
-      return tags.filter(t => t.startsWith('ctx:')).map(t => t.replace('ctx:', ''));
-  }
-
   public async saveNoteLocal(note: HistoryItem) {
     // 1. Save Content to IDB
     await this.idb.put(STORE_CONTENT, note.id, note.content);
@@ -228,14 +181,7 @@ export class StorageService {
     // 2. Save Metadata to LS
     const meta = this.getLocalNotesMetadata();
     const existingIndex = meta.findIndex(n => n.id === note.id);
-    
-    // Ensure updated_at is set
-    const updatedNote = { ...note, updated_at: Date.now() };
-    
-    // Map context IDs to tags for storage persistence
-    updatedNote.tags = this.mapContextToTags(updatedNote);
-    
-    const lightweightNote = this.stripContent({ ...updatedNote, _status: note._status || 'local' });
+    const lightweightNote = this.stripContent({ ...note, _status: note._status || 'local' });
 
     if (existingIndex >= 0) {
       meta[existingIndex] = lightweightNote;
@@ -245,84 +191,98 @@ export class StorageService {
     localStorage.setItem('neuro_notes', JSON.stringify(meta));
   }
 
-  // ... (existing deleteNoteLocal)
-
+  public async deleteNoteLocal(id: string) {
+    await this.idb.delete(STORE_CONTENT, id);
+    const notes = this.getLocalNotesMetadata().filter(n => n.id !== id);
+    localStorage.setItem('neuro_notes', JSON.stringify(notes));
+  }
+  
   // NEW: Dual-Write Rename (Syncs to Cloud if applicable)
   public async renameNote(id: string, newTopic: string) {
-      // ... (existing implementation)
+      // 1. Local Update (Optimistic UI)
+      const notes = this.getLocalNotesMetadata();
+      const note = notes.find(n => n.id === id);
+      if (note) {
+          note.topic = newTopic;
+          localStorage.setItem('neuro_notes', JSON.stringify(notes));
+      }
+
+      // 2. Cloud Update (Fire & Forget logic or Await based on usage)
+      if (note && (note._status === 'synced' || note._status === 'cloud') && this.supabase) {
+          const { error } = await this.supabase
+              .from('neuro_notes')
+              .update({ topic: newTopic })
+              .eq('id', id);
+          
+          if (error) console.error("Cloud Rename Failed", error);
+      }
   }
 
   // --- CLOUD SYNC (NEURO_NOTES TABLE) ---
-  public async syncNotesFromCloud(): Promise<void> {
+  
+  public async syncWithCloud(): Promise<void> {
       if (!this.supabase) return;
 
-      const { data, error } = await this.supabase
-          .from('neuro_notes')
-          .select('id, topic, timestamp, updated_at, mode, provider, folder_id, parent_id, tags');
-      
-      if (error) {
-          console.error("Cloud Sync Error", error);
-          return;
-      }
+      try {
+          // 1. Fetch Cloud Metadata
+          const { data: cloudNotes, error } = await this.supabase
+              .from('neuro_notes')
+              .select('id, timestamp, topic, mode, provider, folder_id, parent_id, tags');
+          
+          if (error) throw error;
+          if (!cloudNotes) return;
 
-      if (data) {
+          // 2. Merge with Local
           const localNotes = this.getLocalNotesMetadata();
           const localMap = new Map(localNotes.map(n => [n.id, n]));
-          const cloudIds = new Set(data.map((n: any) => n.id));
           let hasChanges = false;
 
-          // 1. Update/Add from Cloud
-          data.forEach((cloudNote: any) => {
-              const local = localMap.get(cloudNote.id);
+          for (const cNote of cloudNotes) {
+              const local = localMap.get(cNote.id);
               
-              // ROBUST TIME PARSING: Handle BigInt (number), Numeric String, or ISO String
-              let cloudTime = 0;
-              const rawTime = cloudNote.updated_at || cloudNote.timestamp;
-              
-              if (typeof rawTime === 'number') {
-                  cloudTime = rawTime;
-              } else if (typeof rawTime === 'string') {
-                  // If it's all digits, it's a stringified BigInt (epoch)
-                  if (/^\d+$/.test(rawTime)) {
-                      cloudTime = parseInt(rawTime, 10);
-                  } else {
-                      // Otherwise assume ISO string
-                      cloudTime = new Date(rawTime).getTime();
+              const mappedCNote: HistoryItem = {
+                  id: cNote.id,
+                  timestamp: cNote.timestamp,
+                  topic: cNote.topic,
+                  mode: cNote.mode,
+                  provider: cNote.provider,
+                  folderId: cNote.folder_id,
+                  parentId: cNote.parent_id,
+                  tags: cNote.tags,
+                  content: '', // Metadata only
+                  _status: 'cloud'
+              };
+
+              if (!local) {
+                  // New from Cloud
+                  localNotes.push(mappedCNote);
+                  hasChanges = true;
+              } else {
+                  // Exists locally. Update status if needed.
+                  if (local._status !== 'synced') {
+                      local._status = 'synced';
+                      hasChanges = true;
+                  }
+                  
+                  // Update metadata if cloud is newer
+                  if (cNote.timestamp > local.timestamp) {
+                      local.timestamp = cNote.timestamp;
+                      local.topic = cNote.topic;
+                      local.mode = cNote.mode;
+                      local.tags = cNote.tags;
+                      local.folderId = cNote.folder_id;
+                      local.parentId = cNote.parent_id;
+                      hasChanges = true;
                   }
               }
-
-              const localTime = local ? (local.updated_at || local.timestamp) : 0;
-
-              if (!local || cloudTime > localTime) {
-                  const merged: HistoryItem = {
-                      id: cloudNote.id,
-                      topic: cloudNote.topic,
-                      timestamp: new Date(cloudNote.timestamp).getTime(), // Ensure number
-                      updated_at: cloudTime,
-                      mode: cloudNote.mode,
-                      provider: cloudNote.provider,
-                      folderId: cloudNote.folder_id,
-                      parentId: cloudNote.parent_id,
-                      tags: cloudNote.tags,
-                      attached_context_ids: this.mapTagsToContext(cloudNote.tags || []), // Extract Context IDs
-                      content: local ? local.content : "", // Keep local content if exists, else empty (lazy load)
-                      _status: 'synced'
-                  };
-                  localMap.set(cloudNote.id, merged);
-                  hasChanges = true;
-              } else if (local && local._status !== 'synced') {
-                  // If local exists and is newer/same, just mark as synced if it matches
-                  local._status = 'synced';
-                  hasChanges = true;
-              }
-          });
-
-          // ... (existing deletion logic)
+          }
 
           if (hasChanges) {
-              const mergedList = Array.from(localMap.values());
-              localStorage.setItem('neuro_notes', JSON.stringify(mergedList));
+              localStorage.setItem('neuro_notes', JSON.stringify(localNotes));
           }
+
+      } catch (e) {
+          console.error("Sync Error", e);
       }
   }
 
@@ -330,22 +290,14 @@ export class StorageService {
       if (!this.supabase) throw new Error("Supabase not connected. Please check Settings.");
       
       // CRITICAL FIX: Hydrate Content from IDB if missing in the payload
+      // In hybrid mode, the UI often passes metadata objects where content is ""
       let fullContent = note.content;
       if (!fullContent || fullContent.length === 0) {
           fullContent = await this.getNoteContent(note.id);
       }
 
-      // SAFETY CHECK: Do not upload empty content if we failed to retrieve it
-      if (!fullContent && note.content === "") {
-          console.warn(`Skipping upload for note ${note.id}: Content is empty and could not be retrieved.`);
-          return null; 
-      }
-
-      // Ensure tags include context IDs
-      const finalTags = this.mapContextToTags(note);
-
       // MAPPING: Ensure payload matches 'neuro_notes' table structure exactly
-      // id, timestamp, topic, mode, content, provider, folder_id, parent_id, tags, updated_at
+      // id, timestamp, topic, mode, content, provider, folder_id, parent_id, tags
       const sqlPayload = {
           id: note.id,
           timestamp: note.timestamp, // BigInt in SQL (compatible with JS Date.now number)
@@ -355,8 +307,7 @@ export class StorageService {
           provider: note.provider,
           folder_id: note.folderId || null,
           parent_id: note.parentId || null,
-          tags: finalTags, // Use mapped tags
-          updated_at: Date.now() // FIX: Schema uses BigInt (epoch ms), not ISO String
+          tags: note.tags && note.tags.length > 0 ? note.tags : [] // Ensure array for text[]
       };
 
       // CRITICAL FIX: Add onConflict to prevent "duplicate key" errors on re-sync
@@ -375,48 +326,13 @@ export class StorageService {
       const idx = notes.findIndex(n => n.id === note.id);
       if (idx >= 0) {
           notes[idx]._status = 'synced';
-          notes[idx].updated_at = sqlPayload.updated_at; // Update local meta
-          notes[idx].tags = finalTags; // Update local tags
           localStorage.setItem('neuro_notes', JSON.stringify(notes));
       }
       return data;
   }
   
-  // ... (existing importCloudNote)
-
-  // NEW: Check if Library Material exists (Deduplication)
-  public async findLibraryMaterialByHash(title: string, size: number): Promise<LibraryMaterial | null> {
-      if (!this.supabase) return null;
-      
-      // Simple hash proxy: Title + Size
-      const { data } = await this.supabase
-          .from('library_materials')
-          .select('id, title, size')
-          .eq('title', title)
-          .eq('size', size)
-          .maybeSingle();
-          
-      return data as LibraryMaterial | null;
-  }
-
-  // NEW: Get Library Materials by IDs (Batch Fetch)
-  public async getLibraryMaterialsByIds(ids: string[]): Promise<LibraryMaterial[]> {
-      if (!ids || ids.length === 0) return [];
-      
-      // 1. Try Local Cache (if implemented later, for now fetch fresh)
-      
-      // 2. Fetch from Cloud
-      if (this.supabase) {
-          const { data } = await this.supabase
-              .from('library_materials')
-              .select('*')
-              .in('id', ids);
-          return data as LibraryMaterial[] || [];
-      }
-      return [];
-  }
-
-  public async getNoteContentFromCloud(noteMeta: HistoryItem): Promise<string> {
+  // NEW: Import/Download from Cloud to Local
+  public async importCloudNote(noteMeta: HistoryItem): Promise<void> {
       if (!this.supabase) throw new Error("Supabase not connected.");
 
       let fullContent = noteMeta.content;
@@ -447,31 +363,6 @@ export class StorageService {
       if (!this.supabase) return;
       const { error } = await this.supabase.from('neuro_notes').delete().eq('id', id);
       if (error) throw new Error(`Cloud delete failed: ${error.message}`);
-  }
-
-  // --- REALTIME SUBSCRIPTIONS ---
-  public subscribeToNotes(callback: (payload: any) => void) {
-    if (!this.supabase) return null;
-    return this.supabase
-      .channel('neuro_notes_changes')
-      .on(
-        'postgres_changes',
-        { event: '*', schema: 'public', table: 'neuro_notes' },
-        (payload) => callback(payload)
-      )
-      .subscribe();
-  }
-
-  public subscribeToLibrary(callback: (payload: any) => void) {
-    if (!this.supabase) return null;
-    return this.supabase
-      .channel('library_materials_changes')
-      .on(
-        'postgres_changes',
-        { event: '*', schema: 'public', table: 'library_materials' },
-        (payload) => callback(payload)
-      )
-      .subscribe();
   }
 
   // --- FOLDERS ---
@@ -544,71 +435,6 @@ export class StorageService {
       localStorage.setItem('neuro_saved_queues', JSON.stringify(filtered));
   }
 
-  // --- KNOWLEDGE BASE ---
-  public getKnowledgeSources(): KnowledgeSource[] {
-      const data = localStorage.getItem('neuro_kb_sources');
-      return data ? JSON.parse(data) : [];
-  }
-
-  public saveKnowledgeSource(source: KnowledgeSource) {
-      const sources = this.getKnowledgeSources();
-      const idx = sources.findIndex(s => s.id === source.id);
-      if (idx >= 0) sources[idx] = source;
-      else sources.push(source);
-      localStorage.setItem('neuro_kb_sources', JSON.stringify(sources));
-  }
-
-  public deleteKnowledgeSource(id: string) {
-      const sources = this.getKnowledgeSources().filter(s => s.id !== id);
-      localStorage.setItem('neuro_kb_sources', JSON.stringify(sources));
-      const files = this.getKnowledgeFilesMeta(id);
-      files.forEach(f => this.idb.delete(STORE_FILES, f.id));
-      localStorage.removeItem(`neuro_kb_files_${id}`);
-  }
-
-  public getKnowledgeFilesMeta(sourceId: string): KnowledgeFile[] {
-      const data = localStorage.getItem(`neuro_kb_files_${sourceId}`);
-      return data ? JSON.parse(data) : [];
-  }
-
-  public async getKnowledgeFileContent(fileId: string): Promise<string> {
-      return await this.idb.get(STORE_FILES, fileId);
-  }
-
-  public async saveKnowledgeFiles(sourceId: string, files: KnowledgeFile[]) {
-      const metaFiles: KnowledgeFile[] = [];
-      for (const f of files) {
-          if (f.data) {
-             await this.idb.put(STORE_FILES, f.id, f.data);
-          }
-          const { data, ...meta } = f;
-          metaFiles.push(meta);
-      }
-      const existing = this.getKnowledgeFilesMeta(sourceId);
-      const updated = [...existing];
-      metaFiles.forEach(f => {
-          const idx = updated.findIndex(ex => ex.id === f.id);
-          if (idx >= 0) updated[idx] = f;
-          else updated.push(f);
-      });
-      localStorage.setItem(`neuro_kb_files_${sourceId}`, JSON.stringify(updated));
-  }
-
-  public connectNotes(idA: string, idB: string) {
-      const notes = this.getLocalNotesMetadata();
-      const noteA = notes.find(n => n.id === idA);
-      const noteB = notes.find(n => n.id === idB);
-      if (noteA && noteB) {
-          const linkTagA = `link:${idB}`;
-          const linkTagB = `link:${idA}`;
-          if (!noteA.tags) noteA.tags = [];
-          if (!noteA.tags.includes(linkTagA)) noteA.tags.push(linkTagA);
-          if (!noteB.tags) noteB.tags = [];
-          if (!noteB.tags.includes(linkTagB)) noteB.tags.push(linkTagB);
-          localStorage.setItem('neuro_notes', JSON.stringify(notes));
-      }
-  }
-
   // --- LIBRARY MATERIALS (Cloud - library_materials Table) ---
   public async getLibraryMaterials(): Promise<LibraryMaterial[]> {
     if (!this.supabase) throw new Error("Supabase not connected");
@@ -632,8 +458,7 @@ export class StorageService {
         processed_content: material.processed_content || null,
         file_type: material.file_type,
         tags: material.tags && material.tags.length > 0 ? material.tags : [],
-        size: material.size || 0,
-        updated_at: new Date().toISOString() // Explicitly update timestamp
+        size: material.size || 0
     };
 
     // CRITICAL FIX: Add onConflict to upsert

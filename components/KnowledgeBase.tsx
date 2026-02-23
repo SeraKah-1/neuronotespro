@@ -6,7 +6,6 @@ import {
 } from 'lucide-react';
 import { StorageService } from '../services/storageService';
 import { LibraryMaterial } from '../types';
-import { extractTextFromFile } from '../utils/pdfExtractor';
 
 const KnowledgeBase: React.FC = () => {
   const [cloudMaterials, setCloudMaterials] = useState<LibraryMaterial[]>([]);
@@ -41,42 +40,22 @@ const KnowledgeBase: React.FC = () => {
           setIsProcessing(true);
           try {
               for (const file of files) {
-                  let contentToSave = "";
-                  let fileType = file.type || 'application/octet-stream';
-                  let processedStatus = "Raw upload";
-
-                  // SMART EXTRACTION: If PDF/Text, extract text content to save space
-                  if (file.type === 'application/pdf' || file.name.endsWith('.pdf') || file.type.includes('text') || file.name.endsWith('.md') || file.name.endsWith('.txt')) {
-                      try {
-                          const text = await extractTextFromFile(file);
-                          // Store as Base64 Text
-                          contentToSave = btoa(unescape(encodeURIComponent(text)));
-                          fileType = 'text/plain'; // Treat as text for AI
-                          processedStatus = "Extracted Text";
-                      } catch (extractError) {
-                          console.warn("Extraction failed, falling back to raw", extractError);
-                          if (file.size > 1.5 * 1024 * 1024) {
-                              alert(`File "${file.name}" extraction failed and is too large for raw upload.`);
-                              continue;
-                          }
-                          contentToSave = await readFileAsBase64(file);
-                      }
-                  } else {
-                      // Binary files (Images, etc) - Strict Limit
-                      if (file.size > 2 * 1024 * 1024) {
-                          alert(`Image/Binary file "${file.name}" is too large (>2MB).`);
-                          continue;
-                      }
-                      contentToSave = await readFileAsBase64(file);
+                  // 1. STICT SIZE LIMIT FOR SQL TEXT COLUMN (Safe Limit ~1.5MB)
+                  // Base64 adds ~33% overhead. 1.5MB file -> ~2MB string. 
+                  if (file.size > 1.5 * 1024 * 1024) {
+                      alert(`File "${file.name}" is too large (>1.5MB). Current database mode only supports small documents. For larger files, enable Storage Buckets.`);
+                      continue;
                   }
+
+                  const base64 = await readFileAsBase64(file);
                   
                   const newMaterial: LibraryMaterial = {
                       id: crypto.randomUUID(),
                       title: file.name,
-                      file_type: fileType,
-                      content: contentToSave,
-                      processed_content: processedStatus, 
-                      tags: ['uploaded', processedStatus === "Extracted Text" ? 'extracted' : 'raw'],
+                      file_type: file.type || 'application/octet-stream',
+                      content: base64,
+                      processed_content: "Raw upload", 
+                      tags: ['uploaded', 'raw'],
                       size: file.size
                   };
                   
@@ -167,7 +146,7 @@ const KnowledgeBase: React.FC = () => {
           ) : cloudMaterials.length === 0 ? (
               <div className="flex flex-col items-center justify-center h-full text-[var(--ui-text-muted)] border-2 border-dashed border-[var(--ui-border)] rounded-2xl">
                   <div className="w-16 h-16 bg-[var(--ui-surface)] rounded-full flex items-center justify-center mb-4"><FileText size={32} className="opacity-20"/></div>
-                  <p>Library is empty. Upload PDFs (Text Extracted) or Docs.</p>
+                  <p>Library is empty. Upload PDFs (Max 1.5MB) or Text.</p>
               </div>
           ) : viewMode === 'grid' ? (
               <div className="grid grid-cols-2 md:grid-cols-3 lg:grid-cols-4 xl:grid-cols-5 gap-4">

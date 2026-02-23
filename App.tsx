@@ -1,5 +1,5 @@
 import React, { useState, useEffect, Suspense } from 'react';
-import { BrainCircuit, Settings2, Sparkles, BookOpen, Layers, Zap, AlertCircle, X, Key, GraduationCap, Microscope, Puzzle, Database, HardDrive, Cloud, Layout, Activity, FlaskConical, ListChecks, Bell, HelpCircle, Copy, Check, ShieldCheck, Cpu, Unlock, Download, RefreshCw, User, Lock, Server, PenTool, Wand2, ChevronRight, FileText, FolderOpen, Trash2, CheckCircle2, Circle, Command, Bot, Maximize2, Home, Projector, Minimize2, Component, Save, BookTemplate, ChevronDown, ChevronUp, MessageSquarePlus, Library, Palette, Sun, Moon, Coffee, Network, LogOut, Map, ArrowLeftFromLine, ArrowRightFromLine, Filter, Menu, PlusCircle, Paperclip } from 'lucide-react';
+import { BrainCircuit, Settings2, Sparkles, BookOpen, Layers, Zap, AlertCircle, X, Key, GraduationCap, Microscope, Puzzle, Database, Cloud, Layout, Activity, FlaskConical, ListChecks, Bell, HelpCircle, Copy, Check, ShieldCheck, Cpu, Unlock, Download, RefreshCw, User, Lock, Server, PenTool, Wand2, ChevronRight, FileText, FolderOpen, Trash2, CheckCircle2, Circle, Command, Bot, Maximize2, Home, Minimize2, Component, Save, BookTemplate, ChevronDown, ChevronUp, MessageSquarePlus, Library, Palette, Sun, Moon, Coffee, Network, LogOut, ArrowLeftFromLine, ArrowRightFromLine, Filter, Menu, PlusCircle, Paperclip } from 'lucide-react';
 import { AppModel, AppState, NoteData, GenerationConfig, MODE_STRUCTURES, NoteMode, HistoryItem, AIProvider, StorageType, AppView, EncryptedPayload, SavedPrompt, AppTheme } from './types';
 import { generateNoteContent, generateDetailedStructure } from './services/geminiService';
 import { generateNoteContentGroq, fetchGroqModels, generateDetailedStructureGroq } from './services/groqService';
@@ -43,9 +43,6 @@ const AppContent: React.FC = () => {
   const [showAdvancedOptions, setShowAdvancedOptions] = useState(false); // Collapsible Advanced Config
   const [currentTheme, setCurrentTheme] = useState<AppTheme>(AppTheme.CLINICAL_CLEAN);
   
-  // Responsive State
-  const [isLaptop, setIsLaptop] = useState(false);
-
   // Navigation State
   const [navCollapsed, setNavCollapsed] = useState(false);
   const [mobileMenuOpen, setMobileMenuOpen] = useState(false); // Mobile Sidebar Toggle
@@ -54,14 +51,6 @@ const AppContent: React.FC = () => {
   const [showContextPicker, setShowContextPicker] = useState(false);
   const [selectedContextIds, setSelectedContextIds] = useState<string[]>([]);
   const [contextNotesMeta, setContextNotesMeta] = useState<HistoryItem[]>([]);
-
-  // --- RESPONSIVE LISTENER ---
-  useEffect(() => {
-    const checkLaptop = () => setIsLaptop(window.innerWidth >= 1024);
-    checkLaptop();
-    window.addEventListener('resize', checkLaptop);
-    return () => window.removeEventListener('resize', checkLaptop);
-  }, []);
 
   const [config, setConfig] = useState<GenerationConfig>({
     provider: AIProvider.GEMINI,
@@ -144,28 +133,24 @@ const AppContent: React.FC = () => {
   // --- DYNAMIC GROQ FETCH ---
   useEffect(() => {
       const fetchGroq = async () => {
-          // Fetch regardless of config key, let service handle env var fallback
-          const models = await fetchGroqModels(config.groqApiKey);
-          
-          if (models.length > 0) {
-              const formatted = models.map(m => ({
-                  value: m.id,
-                  label: m.id.replace('groq-', '').replace('llama', 'Llama'),
-                  badge: 'Cloud'
-              }));
-              // Merge with defaults to keep "badge" info for core models, but update IDs if needed
-              const merged: { value: string; label: string; badge: string; }[] = [...INITIAL_GROQ_MODELS];
-              formatted.forEach(f => {
-                  if (!merged.find(m => m.value === f.value)) merged.push(f);
-              });
-              setGroqModels(merged);
+          if (config.groqApiKey) {
+              const models = await fetchGroqModels(config.groqApiKey);
+              if (models.length > 0) {
+                  const formatted = models.map(m => ({
+                      value: m.id,
+                      label: m.id.replace('groq-', '').replace('llama', 'Llama'),
+                      badge: 'Cloud'
+                  }));
+                  // Merge with defaults to keep "badge" info for core models, but update IDs if needed
+                  const merged: { value: string; label: string; badge: string; }[] = [...INITIAL_GROQ_MODELS];
+                  formatted.forEach(f => {
+                      if (!merged.find(m => m.value === f.value)) merged.push(f);
+                  });
+                  setGroqModels(merged);
+              }
           }
       };
-      
-      // Fetch if authenticated OR if we have an env key (even if not fully authenticated yet)
-      if (isAuthenticated || (import.meta as any).env?.VITE_GROQ_API_KEY) {
-          fetchGroq();
-      }
+      if (isAuthenticated) fetchGroq();
   }, [config.groqApiKey, isAuthenticated]);
 
   const handleLogout = () => {
@@ -375,7 +360,7 @@ const AppContent: React.FC = () => {
   if (!isAuthenticated) { return <LoginGate onUnlock={handleAuthUnlock} />; }
 
   return (
-    <div className={`h-[100dvh] flex font-sans overflow-hidden transition-colors duration-300 theme-${currentTheme} bg-[var(--ui-bg)] text-[var(--ui-text-main)]`}>
+    <div className={`min-h-screen flex font-sans overflow-hidden transition-colors duration-300 theme-${currentTheme} bg-[var(--ui-bg)] text-[var(--ui-text-main)]`}>
       
       <CommandPalette 
         isOpen={showPalette} 
@@ -389,7 +374,7 @@ const AppContent: React.FC = () => {
       />
 
       {/* --- 1. PRIMARY SIDEBAR (Desktop: Icon Strip, Mobile: Hidden) --- */}
-      <aside className={`hidden md:flex w-[70px] h-full bg-[var(--ui-sidebar)] border-r border-[var(--ui-border)] flex-col items-center py-6 shrink-0 z-40 transition-all ${focusMode ? '-translate-x-full absolute' : 'relative'}`}>
+      <aside className={`hidden md:flex w-[70px] h-screen bg-[var(--ui-sidebar)] border-r border-[var(--ui-border)] flex-col items-center py-6 shrink-0 z-40 transition-all ${focusMode ? '-translate-x-full absolute' : 'relative'}`}>
          <div className="mb-8">
              <div className="w-10 h-10 bg-[var(--ui-primary)] rounded-xl flex items-center justify-center shadow-lg shadow-[var(--ui-primary)]/20">
                  <BrainCircuit className="text-white" size={22} />
@@ -409,32 +394,32 @@ const AppContent: React.FC = () => {
          </div>
       </aside>
 
-      {/* --- 2. SECONDARY SIDEBAR (Laptop: File Tree, Tablet/Mobile: Slide-over) --- */}
+      {/* --- 2. SECONDARY SIDEBAR (Desktop: File Tree, Mobile: Slide-over) --- */}
       <aside className={`
-          w-[280px] h-full bg-[var(--ui-sidebar-secondary)] border-r border-[var(--ui-border)] flex flex-col transition-all duration-300 z-30
-          fixed lg:relative left-0 top-0 bottom-0
-          ${(focusMode || navCollapsed) ? 'lg:w-0 lg:opacity-0 lg:overflow-hidden' : 'lg:w-[280px] lg:opacity-100'}
-          ${mobileMenuOpen ? 'translate-x-0 shadow-2xl' : '-translate-x-full lg:translate-x-0'}
+          w-[280px] h-screen bg-[var(--ui-sidebar-secondary)] border-r border-[var(--ui-border)] flex flex-col transition-all duration-300 z-30
+          fixed md:relative left-0 top-0 bottom-0
+          ${(focusMode || navCollapsed) ? 'md:w-0 md:opacity-0 md:overflow-hidden' : 'md:w-[280px] md:opacity-100'}
+          ${mobileMenuOpen ? 'translate-x-0 shadow-2xl' : '-translate-x-full md:translate-x-0'}
       `}>
           <div className="p-4 flex items-center justify-between border-b border-[var(--ui-border)] bg-[var(--ui-sidebar)] h-[60px] shrink-0">
               <h3 className="font-bold text-sm text-[var(--ui-text-main)] uppercase tracking-wider">Explorer</h3>
-              {/* Close button for Mobile/Tablet */}
-              <button onClick={() => setMobileMenuOpen(false)} className="lg:hidden text-[var(--ui-text-muted)] hover:text-[var(--ui-text-main)]"><X size={18}/></button>
-              {/* Collapse button for Laptop */}
-              <button onClick={() => setNavCollapsed(true)} className="hidden lg:block text-[var(--ui-text-muted)] hover:text-[var(--ui-text-main)]"><ArrowLeftFromLine size={16}/></button>
+              {/* Close button for Mobile */}
+              <button onClick={() => setMobileMenuOpen(false)} className="md:hidden text-[var(--ui-text-muted)] hover:text-[var(--ui-text-main)]"><X size={18}/></button>
+              {/* Collapse button for Desktop */}
+              <button onClick={() => setNavCollapsed(true)} className="hidden md:block text-[var(--ui-text-muted)] hover:text-[var(--ui-text-main)]"><ArrowLeftFromLine size={16}/></button>
           </div>
           <div className="flex-1 overflow-hidden p-2">
               <FileSystem onSelectNote={handleSelectNoteFromFileSystem} activeNoteId={appState.activeNoteId} />
           </div>
       </aside>
       
-      {/* Mobile/Tablet Overlay for Sidebar */}
-      {mobileMenuOpen && <div className="fixed inset-0 bg-black/50 z-20 lg:hidden" onClick={() => setMobileMenuOpen(false)}></div>}
+      {/* Mobile Overlay for Sidebar */}
+      {mobileMenuOpen && <div className="fixed inset-0 bg-black/50 z-20 md:hidden" onClick={() => setMobileMenuOpen(false)}></div>}
 
       {/* --- 3. MAIN CANVAS --- */}
-      <main className="flex-1 relative h-full overflow-hidden flex flex-col bg-[var(--ui-bg)]">
+      <main className="flex-1 relative h-screen overflow-hidden flex flex-col bg-[var(--ui-bg)]">
          
-         {/* MOBILE HEADER (< md) */}
+         {/* MOBILE HEADER */}
          <div className="md:hidden h-14 bg-[var(--ui-sidebar)] border-b border-[var(--ui-border)] flex items-center justify-between px-4 shrink-0 z-20">
              <div className="flex items-center gap-3">
                  <button onClick={() => setMobileMenuOpen(true)} className="text-[var(--ui-text-main)]"><Menu size={20}/></button>
@@ -443,17 +428,9 @@ const AppContent: React.FC = () => {
              <button onClick={() => setShowPalette(true)} className="p-2 text-[var(--ui-text-muted)]"><Command size={18}/></button>
          </div>
 
-         {/* TABLET HEADER / TRIGGER (md only) */}
-         <div className="hidden md:flex lg:hidden h-14 border-b border-[var(--ui-border)] items-center justify-between px-4 shrink-0 bg-[var(--ui-bg)]">
-             <button onClick={() => setMobileMenuOpen(true)} className="flex items-center gap-2 text-[var(--ui-text-muted)] hover:text-[var(--ui-text-main)] font-bold text-xs uppercase tracking-wider">
-                 <Menu size={18}/> Explorer
-             </button>
-             <span className="font-bold text-[var(--ui-text-main)] flex items-center gap-2 opacity-50"><BrainCircuit size={16}/> NeuroNote</span>
-         </div>
-
-         {/* Collapsed Nav Toggle (Laptop Only) */}
+         {/* Collapsed Nav Toggle (Desktop Only) */}
          {navCollapsed && !focusMode && (
-             <button onClick={() => setNavCollapsed(false)} className="hidden lg:block absolute top-4 left-4 z-50 p-2 bg-[var(--ui-surface)] border border-[var(--ui-border)] rounded-lg shadow-sm text-[var(--ui-text-muted)] hover:text-[var(--ui-text-main)]">
+             <button onClick={() => setNavCollapsed(false)} className="hidden md:block absolute top-4 left-4 z-50 p-2 bg-[var(--ui-surface)] border border-[var(--ui-border)] rounded-lg shadow-sm text-[var(--ui-text-muted)] hover:text-[var(--ui-text-main)]">
                  <ArrowRightFromLine size={16}/>
              </button>
          )}
@@ -512,7 +489,7 @@ const AppContent: React.FC = () => {
                      </div>
                  )}
 
-                 {appState.currentView === AppView.SYLLABUS && <SyllabusFlow config={config} onSelectTopic={(t) => { setNoteData(prev => ({...prev, topic: t})); setAppState(prev => ({...prev, currentView: AppView.WORKSPACE})); }} />}
+                 {appState.currentView === AppView.SYLLABUS && <SyllabusFlow config={config} onSelectTopic={(t) => { setNoteData(prev => ({...prev, topic: t})); setAppState(prev => ({...prev, currentView: AppView.WORKSPACE})); }} groqModels={groqModels} />}
 
                  {appState.currentView === AppView.SETTINGS && (
                      /* SETTINGS PANEL */
@@ -573,229 +550,129 @@ const AppContent: React.FC = () => {
                  )}
 
                  {appState.currentView === AppView.WORKSPACE && !appState.generatedContent && (
-                     <div className={`mx-auto h-full flex flex-col justify-center animate-slide-up pb-20 transition-all ${isLaptop ? 'max-w-7xl px-12 grid grid-cols-12 gap-16 items-center' : 'max-w-5xl px-4'}`}>
-                         
-                         {/* LEFT COLUMN: INPUT */}
-                         <div className={`${isLaptop ? 'col-span-7' : 'w-full'}`}>
-                             {/* HERO INPUT SECTION */}
-                             <div className={`text-center mb-8 md:mb-10 ${isLaptop ? 'text-left' : ''}`}>
-                                 <div className={`w-16 h-16 md:w-20 md:h-20 bg-gradient-to-br from-blue-500 to-cyan-400 rounded-3xl flex items-center justify-center shadow-xl shadow-blue-500/20 mb-6 ${isLaptop ? '' : 'mx-auto'}`}>
-                                     <Sparkles className="w-8 h-8 md:w-10 md:h-10 text-white"/>
-                                 </div>
-                                 <h1 className="text-2xl md:text-4xl font-extrabold text-[var(--ui-text-main)] mb-2">What shall we learn today?</h1>
-                                 <p className="text-[var(--ui-text-muted)] text-sm md:text-base">Enter a medical topic to generate a comprehensive study module.</p>
+                     <div className="max-w-5xl mx-auto h-full flex flex-col justify-center animate-slide-up pb-20">
+                         {/* HERO INPUT SECTION */}
+                         <div className="text-center mb-8 md:mb-10">
+                             <div className="w-16 h-16 md:w-20 md:h-20 bg-gradient-to-br from-blue-500 to-cyan-400 rounded-3xl mx-auto flex items-center justify-center shadow-xl shadow-blue-500/20 mb-6">
+                                 <Sparkles className="w-8 h-8 md:w-10 md:h-10 text-white"/>
                              </div>
+                             <h1 className="text-2xl md:text-4xl font-extrabold text-[var(--ui-text-main)] mb-2">What shall we learn today?</h1>
+                             <p className="text-[var(--ui-text-muted)] text-sm md:text-base">Enter a medical topic to generate a comprehensive study module.</p>
+                         </div>
 
-                             <div className="bg-[var(--ui-surface)] border border-[var(--ui-border)] p-2 rounded-2xl shadow-xl shadow-[var(--ui-shadow)] w-full flex flex-col gap-2 transition-all">
-                                 <div className="flex flex-col md:flex-row md:items-center gap-2">
-                                     <div className="hidden md:block pl-4 text-[var(--ui-text-muted)]"><Layers size={20}/></div>
-                                     <input 
-                                         type="text" 
-                                         value={noteData.topic} 
-                                         onChange={(e) => setNoteData({...noteData, topic: e.target.value})}
-                                         placeholder="e.g. Heart Failure..."
-                                         className="flex-1 bg-transparent p-4 text-lg outline-none text-[var(--ui-text-main)] placeholder:text-gray-300 font-medium"
-                                         autoFocus
-                                     />
-                                     <div className="flex items-center gap-2 px-2 pb-2 md:pb-0 justify-end">
-                                         <button 
-                                            onClick={() => setConfig(prev => ({...prev, provider: prev.provider === AIProvider.GEMINI ? AIProvider.GROQ : AIProvider.GEMINI}))}
-                                            className="text-[10px] font-bold px-2 py-1 rounded border border-[var(--ui-border)] text-[var(--ui-text-muted)] hover:text-[var(--ui-text-main)]"
-                                            title="Switch Provider"
-                                         >
-                                             {config.provider.toUpperCase()}
-                                         </button>
-                                         <button onClick={handleGenerate} className="bg-[var(--ui-primary)] hover:opacity-90 text-white px-6 md:px-8 py-3 md:py-4 rounded-xl font-bold transition-all flex items-center gap-2 text-sm md:text-base">
-                                             Generate <ArrowRightFromLine size={16}/>
-                                         </button>
-                                     </div>
-                                 </div>
-
-                                 {/* COLLAPSIBLE ADVANCED CONTROL */}
-                                 <div className="w-full px-2">
+                         <div className="bg-[var(--ui-surface)] border border-[var(--ui-border)] p-2 rounded-2xl shadow-xl shadow-[var(--ui-shadow)] max-w-3xl mx-auto w-full flex flex-col gap-2 transition-all">
+                             <div className="flex flex-col md:flex-row md:items-center gap-2">
+                                 <div className="hidden md:block pl-4 text-[var(--ui-text-muted)]"><Layers size={20}/></div>
+                                 <input 
+                                     type="text" 
+                                     value={noteData.topic} 
+                                     onChange={(e) => setNoteData({...noteData, topic: e.target.value})}
+                                     placeholder="e.g. Heart Failure..."
+                                     className="flex-1 bg-transparent p-4 text-lg outline-none text-[var(--ui-text-main)] placeholder:text-gray-300 font-medium"
+                                     autoFocus
+                                 />
+                                 <div className="flex items-center gap-2 px-2 pb-2 md:pb-0 justify-end">
                                      <button 
-                                        onClick={() => setShowAdvancedOptions(!showAdvancedOptions)}
-                                        className="flex items-center gap-1 text-[10px] font-bold text-[var(--ui-text-muted)] hover:text-[var(--ui-text-main)] transition-colors mb-2 ml-1"
+                                        onClick={() => setConfig(prev => ({...prev, provider: prev.provider === AIProvider.GEMINI ? AIProvider.GROQ : AIProvider.GEMINI}))}
+                                        className="text-[10px] font-bold px-2 py-1 rounded border border-[var(--ui-border)] text-[var(--ui-text-muted)] hover:text-[var(--ui-text-main)]"
+                                        title="Switch Provider"
                                      >
-                                         <Settings2 size={10}/> {showAdvancedOptions ? 'Hide Advanced' : 'Advanced'} {showAdvancedOptions ? <ChevronUp size={10}/> : <ChevronDown size={10}/>}
+                                         {config.provider.toUpperCase()}
                                      </button>
-                                     
-                                     {showAdvancedOptions && (
-                                         <div className="grid grid-cols-1 md:grid-cols-2 gap-4 p-4 bg-[var(--ui-bg)] rounded-xl border border-[var(--ui-border)] animate-slide-up">
-                                             <div className="space-y-2">
-                                                 <label className="text-[10px] font-bold text-[var(--ui-text-muted)] uppercase flex items-center gap-2"><Component size={12}/> Custom Blueprint Instruction</label>
-                                                 <textarea 
-                                                    value={config.customStructurePrompt}
-                                                    onChange={(e) => setConfig({...config, customStructurePrompt: e.target.value})}
-                                                    className="w-full h-20 bg-[var(--ui-surface)] border border-[var(--ui-border)] rounded-lg p-3 text-xs text-[var(--ui-text-main)] outline-none resize-none focus:border-[var(--ui-primary)]"
-                                                    placeholder="Optional: Define how the syllabus/outline should be structured..."
-                                                 />
-                                             </div>
-                                             <div className="space-y-2">
-                                                 <label className="text-[10px] font-bold text-[var(--ui-text-muted)] uppercase flex items-center gap-2"><PenTool size={12}/> Custom Content Instruction</label>
-                                                 <textarea 
-                                                    value={config.customContentPrompt}
-                                                    onChange={(e) => setConfig({...config, customContentPrompt: e.target.value})}
-                                                    className="w-full h-20 bg-[var(--ui-surface)] border border-[var(--ui-border)] rounded-lg p-3 text-xs text-[var(--ui-text-main)] outline-none resize-none focus:border-[var(--ui-primary)]"
-                                                    placeholder="Optional: Specific instructions for the writing style, language, or depth..."
-                                                 />
-                                             </div>
-                                         </div>
-                                     )}
+                                     <button onClick={handleGenerate} className="bg-[var(--ui-primary)] hover:opacity-90 text-white px-6 md:px-8 py-3 md:py-4 rounded-xl font-bold transition-all flex items-center gap-2 text-sm md:text-base">
+                                         Generate <ArrowRightFromLine size={16}/>
+                                     </button>
                                  </div>
                              </div>
 
-                             {/* Quick Options */}
-                             <div className={`flex flex-col md:flex-row mt-6 gap-4 ${isLaptop ? 'justify-start' : 'justify-center px-4'}`}>
-                                 <div className="flex items-center gap-2 px-4 py-2 bg-[var(--ui-surface)] rounded-full border border-[var(--ui-border)] w-full md:w-auto">
-                                     <span className="text-[10px] font-bold text-[var(--ui-text-muted)] uppercase">Model</span>
-                                     <select 
-                                        value={config.model}
-                                        onChange={(e) => setConfig({...config, model: e.target.value})}
-                                        className="bg-transparent text-xs font-bold text-[var(--ui-text-main)] outline-none cursor-pointer flex-1 md:flex-none"
-                                     >
-                                         {config.provider === AIProvider.GEMINI ? GEMINI_MODELS.map(m => <option key={m.value} value={m.value}>{m.label}</option>) : groqModels.map(m => <option key={m.value} value={m.value}>{m.label}</option>)}
-                                     </select>
-                                 </div>
+                             {/* COLLAPSIBLE ADVANCED CONTROL */}
+                             <div className="w-full px-2">
+                                 <button 
+                                    onClick={() => setShowAdvancedOptions(!showAdvancedOptions)}
+                                    className="flex items-center gap-1 text-[10px] font-bold text-[var(--ui-text-muted)] hover:text-[var(--ui-text-main)] transition-colors mb-2 ml-1"
+                                 >
+                                     <Settings2 size={10}/> {showAdvancedOptions ? 'Hide Advanced' : 'Advanced'} {showAdvancedOptions ? <ChevronUp size={10}/> : <ChevronDown size={10}/>}
+                                 </button>
                                  
-                                 <div className="flex items-center gap-2 px-4 py-2 bg-[var(--ui-surface)] rounded-full border border-[var(--ui-border)] w-full md:w-auto">
-                                     <span className="text-[10px] font-bold text-[var(--ui-text-muted)] uppercase">Mode</span>
-                                     <select 
-                                        value={config.mode}
-                                        onChange={(e) => { const m = e.target.value as NoteMode; setConfig({...config, mode: m}); setNoteData({...noteData, structure: MODE_STRUCTURES[m]}); }}
-                                        className="bg-transparent text-xs font-bold text-[var(--ui-text-main)] outline-none cursor-pointer flex-1 md:flex-none"
-                                     >
-                                         <option value={NoteMode.GENERAL}>General</option>
-                                         <option value={NoteMode.COMPREHENSIVE}>Textbook</option>
-                                         <option value={NoteMode.CHEAT_CODES}>Cheat Sheet</option>
-                                     </select>
-                                 </div>
-                             </div>
-                             
-                             <div className={`mt-8 w-full flex flex-col gap-4 ${isLaptop ? '' : 'max-w-2xl mx-auto px-4'}`}>
-                                 <div className="flex items-center justify-between text-[10px] font-bold text-[var(--ui-text-muted)] uppercase tracking-widest px-1">
-                                     <span>Context & Files</span>
-                                     <button onClick={() => setShowContextPicker(true)} className="flex items-center gap-1 hover:text-[var(--ui-primary)] transition-colors">
-                                         <Paperclip size={10}/> Add Library Context ({selectedContextIds.length})
-                                     </button>
-                                 </div>
-                                 <FileUploader files={noteData.files} onFilesChange={(f) => setNoteData({...noteData, files: f})} />
+                                 {showAdvancedOptions && (
+                                     <div className="grid grid-cols-1 md:grid-cols-2 gap-4 p-4 bg-[var(--ui-bg)] rounded-xl border border-[var(--ui-border)] animate-slide-up">
+                                         <div className="space-y-2">
+                                             <label className="text-[10px] font-bold text-[var(--ui-text-muted)] uppercase flex items-center gap-2"><Component size={12}/> Custom Blueprint Instruction</label>
+                                             <textarea 
+                                                value={config.customStructurePrompt}
+                                                onChange={(e) => setConfig({...config, customStructurePrompt: e.target.value})}
+                                                className="w-full h-20 bg-[var(--ui-surface)] border border-[var(--ui-border)] rounded-lg p-3 text-xs text-[var(--ui-text-main)] outline-none resize-none focus:border-[var(--ui-primary)]"
+                                                placeholder="Optional: Define how the syllabus/outline should be structured..."
+                                             />
+                                         </div>
+                                         <div className="space-y-2">
+                                             <label className="text-[10px] font-bold text-[var(--ui-text-muted)] uppercase flex items-center gap-2"><PenTool size={12}/> Custom Content Instruction</label>
+                                             <textarea 
+                                                value={config.customContentPrompt}
+                                                onChange={(e) => setConfig({...config, customContentPrompt: e.target.value})}
+                                                className="w-full h-20 bg-[var(--ui-surface)] border border-[var(--ui-border)] rounded-lg p-3 text-xs text-[var(--ui-text-main)] outline-none resize-none focus:border-[var(--ui-primary)]"
+                                                placeholder="Optional: Specific instructions for the writing style, language, or depth..."
+                                             />
+                                         </div>
+                                     </div>
+                                 )}
                              </div>
                          </div>
 
-                         {/* RIGHT COLUMN: TEMPLATES (Laptop Only) */}
-                         {isLaptop && (
-                             <div className="col-span-5 space-y-6 pl-8 border-l border-[var(--ui-border)]">
-                                 <div className="flex items-center gap-2 text-[var(--ui-text-muted)] font-bold text-xs uppercase tracking-widest mb-4">
-                                     <BookTemplate size={14}/> Quick Start Templates
-                                 </div>
-                                 <div className="grid grid-cols-1 gap-3">
-                                     {[
-                                         { title: "Clinical Case Study", desc: "Generate a patient scenario with differential diagnosis.", icon: Activity, mode: NoteMode.CLINICAL },
-                                         { title: "Exam Cheat Sheet", desc: "High-yield facts for rapid review.", icon: Zap, mode: NoteMode.CHEAT_CODES },
-                                         { title: "Research Summary", desc: "Summarize papers and findings.", icon: Microscope, mode: NoteMode.GENERAL },
-                                         { title: "Anatomy Deep Dive", desc: "Detailed structural analysis.", icon: Layers, mode: NoteMode.COMPREHENSIVE }
-                                     ].map((t, i) => (
-                                         <button 
-                                            key={i}
-                                            onClick={() => { setNoteData({...noteData, topic: t.title}); setConfig({...config, mode: t.mode}); }}
-                                            className="group p-4 bg-[var(--ui-surface)] hover:bg-[var(--ui-bg)] border border-[var(--ui-border)] hover:border-[var(--ui-primary)] rounded-xl text-left transition-all hover:shadow-lg hover:-translate-y-1"
-                                         >
-                                             <div className="flex items-center gap-3 mb-1">
-                                                 <div className="p-2 bg-[var(--ui-bg)] rounded-lg text-[var(--ui-primary)] group-hover:bg-[var(--ui-primary)] group-hover:text-white transition-colors">
-                                                     <t.icon size={16}/>
-                                                 </div>
-                                                 <span className="font-bold text-[var(--ui-text-main)]">{t.title}</span>
-                                             </div>
-                                             <p className="text-xs text-[var(--ui-text-muted)] pl-[42px]">{t.desc}</p>
-                                         </button>
-                                     ))}
-                                 </div>
-                                 
-                                 {/* Recent Activity Mini */}
-                                 <div className="mt-8">
-                                     <div className="flex items-center gap-2 text-[var(--ui-text-muted)] font-bold text-xs uppercase tracking-widest mb-4">
-                                         <RefreshCw size={14}/> Recent Activity
-                                     </div>
-                                     <div className="space-y-2">
-                                         {storageService.getLocalNotesMetadata().slice(0, 3).map(note => (
-                                             <div key={note.id} onClick={() => handleSelectNoteFromFileSystem(note)} className="flex items-center justify-between p-3 bg-[var(--ui-bg)] hover:bg-[var(--ui-surface)] border border-[var(--ui-border)] rounded-lg cursor-pointer transition-colors group">
-                                                 <span className="text-xs font-medium text-[var(--ui-text-main)] truncate">{note.topic}</span>
-                                                 <ArrowRightFromLine size={12} className="opacity-0 group-hover:opacity-100 text-[var(--ui-text-muted)]"/>
-                                             </div>
-                                         ))}
-                                     </div>
-                                 </div>
+                         {/* Quick Options */}
+                         <div className="flex flex-col md:flex-row justify-center mt-6 gap-4 px-4">
+                             <div className="flex items-center gap-2 px-4 py-2 bg-[var(--ui-surface)] rounded-full border border-[var(--ui-border)] w-full md:w-auto">
+                                 <span className="text-[10px] font-bold text-[var(--ui-text-muted)] uppercase">Model</span>
+                                 <select 
+                                    value={config.model}
+                                    onChange={(e) => setConfig({...config, model: e.target.value})}
+                                    className="bg-transparent text-xs font-bold text-[var(--ui-text-main)] outline-none cursor-pointer flex-1 md:flex-none"
+                                 >
+                                     {config.provider === AIProvider.GEMINI ? GEMINI_MODELS.map(m => <option key={m.value} value={m.value}>{m.label}</option>) : groqModels.map(m => <option key={m.value} value={m.value}>{m.label}</option>)}
+                                 </select>
                              </div>
-                         )}
+                             
+                             <div className="flex items-center gap-2 px-4 py-2 bg-[var(--ui-surface)] rounded-full border border-[var(--ui-border)] w-full md:w-auto">
+                                 <span className="text-[10px] font-bold text-[var(--ui-text-muted)] uppercase">Mode</span>
+                                 <select 
+                                    value={config.mode}
+                                    onChange={(e) => { const m = e.target.value as NoteMode; setConfig({...config, mode: m}); setNoteData({...noteData, structure: MODE_STRUCTURES[m]}); }}
+                                    className="bg-transparent text-xs font-bold text-[var(--ui-text-main)] outline-none cursor-pointer flex-1 md:flex-none"
+                                 >
+                                     <option value={NoteMode.GENERAL}>General</option>
+                                     <option value={NoteMode.COMPREHENSIVE}>Textbook</option>
+                                     <option value={NoteMode.CHEAT_CODES}>Cheat Sheet</option>
+                                 </select>
+                             </div>
+                         </div>
+                         
+                         <div className="max-w-2xl mx-auto mt-8 w-full px-4 flex flex-col gap-4">
+                             <div className="flex items-center justify-between text-[10px] font-bold text-[var(--ui-text-muted)] uppercase tracking-widest px-1">
+                                 <span>Context & Files</span>
+                                 <button onClick={() => setShowContextPicker(true)} className="flex items-center gap-1 hover:text-[var(--ui-primary)] transition-colors">
+                                     <Paperclip size={10}/> Add Library Context ({selectedContextIds.length})
+                                 </button>
+                             </div>
+                             <FileUploader files={noteData.files} onFilesChange={(f) => setNoteData({...noteData, files: f})} />
+                         </div>
                      </div>
                  )}
 
                  {/* RESULT DISPLAY */}
                  {appState.generatedContent && !appState.isLoading && (
-                     <div className="flex h-full overflow-hidden">
-                        <div className={`flex-1 flex flex-col min-w-0 transition-all duration-300 ${isLaptop && !focusMode ? 'border-r border-[var(--ui-border)]' : ''}`}>
-                             <Suspense fallback={<div>Loading...</div>}>
-                                 <OutputDisplay 
-                                    content={appState.generatedContent} 
-                                    topic={noteData.topic} 
-                                    noteId={appState.activeNoteId || undefined}
-                                    config={config} 
-                                    onUpdateContent={handleUpdateContent}
-                                    onManualSave={handleManualSave}
-                                    onExit={handleExitNote}
-                                    theme={currentTheme} 
-                                 />
-                             </Suspense>
-                        </div>
-                        
-                        {/* LAPTOP RIGHT PANEL (Context & Tools) */}
-                        {isLaptop && !focusMode && (
-                            <div className="w-[320px] shrink-0 bg-[var(--ui-sidebar-secondary)] flex flex-col border-l border-[var(--ui-border)] animate-slide-left">
-                                <div className="p-4 border-b border-[var(--ui-border)] flex items-center justify-between bg-[var(--ui-surface)]">
-                                    <h3 className="font-bold text-xs uppercase tracking-wider text-[var(--ui-text-muted)] flex items-center gap-2">
-                                        <Sparkles size={14} className="text-[var(--ui-primary)]"/> Assistant Context
-                                    </h3>
-                                </div>
-                                <div className="flex-1 overflow-y-auto p-4 space-y-6 custom-scrollbar">
-                                    
-                                    {/* Active Configuration */}
-                                    <div className="space-y-2">
-                                        <label className="text-[10px] font-bold text-[var(--ui-text-muted)] uppercase">Current Model</label>
-                                        <div className="p-2 bg-[var(--ui-bg)] rounded border border-[var(--ui-border)] text-xs font-mono flex items-center justify-between">
-                                            <span>{config.model}</span>
-                                            <div className={`w-2 h-2 rounded-full ${config.provider === AIProvider.GEMINI ? 'bg-blue-500' : 'bg-orange-500'}`}></div>
-                                        </div>
-                                    </div>
-
-                                    {/* Quick Actions */}
-                                    <div className="space-y-2">
-                                        <label className="text-[10px] font-bold text-[var(--ui-text-muted)] uppercase">Quick Actions</label>
-                                        <div className="grid grid-cols-2 gap-2">
-                                            <button onClick={() => setShowContextPicker(true)} className="p-2 bg-[var(--ui-surface)] hover:bg-[var(--ui-bg)] border border-[var(--ui-border)] rounded text-xs text-left flex items-center gap-2 transition-colors">
-                                                <Paperclip size={14}/> Add Context
-                                            </button>
-                                            <button onClick={() => setConfig(prev => ({...prev, mode: prev.mode === NoteMode.GENERAL ? NoteMode.COMPREHENSIVE : NoteMode.GENERAL}))} className="p-2 bg-[var(--ui-surface)] hover:bg-[var(--ui-bg)] border border-[var(--ui-border)] rounded text-xs text-left flex items-center gap-2 transition-colors">
-                                                <Zap size={14}/> {config.mode === NoteMode.GENERAL ? 'Deepen' : 'Simplify'}
-                                            </button>
-                                        </div>
-                                    </div>
-
-                                    {/* Mini Syllabus / Related */}
-                                    <div className="space-y-2">
-                                        <label className="text-[10px] font-bold text-[var(--ui-text-muted)] uppercase">Session History</label>
-                                        <div className="space-y-1">
-                                            {storageService.getLocalNotesMetadata().slice(0, 5).map(note => (
-                                                <div key={note.id} onClick={() => handleSelectNoteFromFileSystem(note)} className="p-2 hover:bg-[var(--ui-surface)] rounded cursor-pointer text-xs truncate border border-transparent hover:border-[var(--ui-border)] transition-all">
-                                                    {note.topic}
-                                                </div>
-                                            ))}
-                                        </div>
-                                    </div>
-                                </div>
-                            </div>
-                        )}
-                     </div>
+                     <Suspense fallback={<div>Loading...</div>}>
+                         <OutputDisplay 
+                            content={appState.generatedContent} 
+                            topic={noteData.topic} 
+                            noteId={appState.activeNoteId || undefined}
+                            config={config} 
+                            onUpdateContent={handleUpdateContent}
+                            onManualSave={handleManualSave}
+                            onExit={handleExitNote}
+                            theme={currentTheme} 
+                            groqModels={groqModels}
+                         />
+                     </Suspense>
                  )}
 
              </div>

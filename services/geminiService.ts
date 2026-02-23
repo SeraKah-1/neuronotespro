@@ -4,15 +4,7 @@ import { GenerationConfig, UploadedFile, SyllabusItem, ChatMessage, NoteMode } f
 import { getStrictPrompt, UNIVERSAL_STRUCTURE_PROMPT } from '../utils/prompts';
 import { processGeneratedNote } from '../utils/formatter';
 
-// --- MODEL FAILOVER CONFIGURATION ---
-const MODEL_PRIORITY = [
-  'gemini-3-flash-preview',
-  'gemini-2.5-flash',
-  'gemini-2.5-flash-lite',
-  'gemini-2.0-flash' // Fallback
-];
-
-// Helper to get authenticated AI instance
+// Helper to get authenticated AI instance with Key Rotation
 const getAIClient = (config: GenerationConfig) => {
   // SAFE ENV ACCESS
   const envKey = (import.meta as any).env?.VITE_API_KEY || (typeof process !== 'undefined' ? process.env.API_KEY : '');
@@ -23,9 +15,11 @@ const getAIClient = (config: GenerationConfig) => {
   }
 
   // KEY ROTATION LOGIC
+  // Support comma-separated or newline-separated keys
   if (apiKey.includes(',') || apiKey.includes('\n')) {
       const keys = apiKey.split(/[\n,]+/).map(k => k.trim()).filter(k => k.length > 0);
       if (keys.length > 0) {
+          // Pick a random key for simple load balancing
           const randomIndex = Math.floor(Math.random() * keys.length);
           apiKey = keys[randomIndex];
       }
@@ -34,61 +28,57 @@ const getAIClient = (config: GenerationConfig) => {
   return new GoogleGenAI({ apiKey });
 };
 
-// --- ROBUST FAILOVER WRAPPER ---
-const executeWithFailover = async <T>(
+// --- BATCH GENERATOR FOR COMPREHENSIVE MODE ---
+const generateBatchSection = async (
+  ai: GoogleGenAI,
   config: GenerationConfig,
-  operationName: string,
-  onProgress: ((status: string) => void) | undefined,
-  operation: (model: string, ai: GoogleGenAI) => Promise<T>
-): Promise<T> => {
-  const ai = getAIClient(config);
+  topic: string,
+  sectionTitle: string,
+  sectionContext: string, // New: Pass sub-bullets as context
+  files: UploadedFile[]
+): Promise<string> => {
   
-  // If user explicitly selected a Pro model, try that first, then fallback to Flash sequence
-  // If user selected a Flash model, start with the priority list
-  let candidateModels = [...MODEL_PRIORITY];
+  // AGGRESSIVE ACADEMIC PROMPT
+  const prompt = `
+  CONTEXT: We are writing a Medical Textbook Chapter on "${topic}".
   
-  if (config.model.includes('pro')) {
-      candidateModels = [config.model, ...MODEL_PRIORITY];
-  } else {
-      // Ensure the user's selected model is tried first if it's not in the list
-      if (!candidateModels.includes(config.model)) {
-          candidateModels = [config.model, ...candidateModels];
-      } else {
-          // Reorder to put selected model first
-          candidateModels = candidateModels.filter(m => m !== config.model);
-          candidateModels.unshift(config.model);
-      }
+  CURRENT SECTION TO WRITE:
+  "${sectionTitle}"
+  
+  SUB-TOPICS TO COVER IN THIS SECTION:
+  ${sectionContext}
+  
+  ***CRITICAL WRITING INSTRUCTIONS (STRICT)***:
+  1. **LENGTH & DEPTH:** Do NOT summarize. This must be a "Deep Dive". Write at least 800-1200 words for this section alone if possible.
+  2. **STRUCTURE:**
+     - Start with a functional definition (Analogy + Mechanism).
+     - Explain the PATHOPHYSIOLOGY in extreme detail (Molecular/Cellular level).
+     - Provide CLINICAL CORRELATIONS (Why does this matter?).
+     - Include a specific PHARMACOLOGY subsection if relevant (Mechanism of Action).
+  3. **FORMATTING:**
+     - Use Bold for key terms.
+     - Use Tables for comparisons.
+     - Use ">>>" for clinical pearls.
+  4. **NO HALLUCINATIONS:** If you don't know a specific detail, state general principles, but do not invent data.
+  
+  ${config.customContentPrompt ? `USER SPECIAL INSTRUCTION: ${config.customContentPrompt}` : ''}
+  
+  OUTPUT THE CONTENT FOR THIS SECTION ONLY. DO NOT REPEAT THE MAIN TITLE.
+  `;
+
+  const parts: any[] = [{ text: prompt }];
+  if (files && files.length > 0) {
+      files.forEach(f => parts.push({ inlineData: { mimeType: f.mimeType, data: f.data } }));
   }
 
-  // Remove duplicates
-  candidateModels = [...new Set(candidateModels)];
-
-  let lastError: any = null;
-
-  for (const model of candidateModels) {
-      try {
-          if (onProgress) onProgress(`Attempting with ${model}...`);
-          return await operation(model, ai);
-      } catch (error: any) {
-          console.warn(`Model ${model} failed:`, error.message);
-          lastError = error;
-
-          // Only failover on Quota/Rate Limits or Server Errors
-          const isQuota = error.message?.includes("429") || error.message?.includes("quota") || error.message?.includes("resource_exhausted");
-          const isServer = error.message?.includes("503") || error.message?.includes("500");
-          
-          if (!isQuota && !isServer) {
-              // If it's a prompt error or invalid argument, fail immediately (don't retry)
-              throw error;
-          }
-          
-          // If Quota error, continue to next model
-          if (onProgress) onProgress(`Quota limit on ${model}. Switching engine...`);
-          await new Promise(r => setTimeout(r, 1000)); // Brief cool-down
-      }
-  }
-
-  throw new Error(`All models failed. Last error: ${lastError?.message || "Unknown error"}`);
+  // Use higher token limit and slightly lower temp for academic precision
+  const response = await ai.models.generateContent({
+      model: config.model, // Recommend Gemini 1.5 Pro or 2.5 Pro for this
+      contents: { parts },
+      config: { temperature: 0.2, maxOutputTokens: 8192 } 
+  });
+  
+  return response.text || `(Failed to generate ${sectionTitle})`;
 };
 
 export const generateNoteContent = async (
@@ -100,114 +90,130 @@ export const generateNoteContent = async (
 ): Promise<string> => {
   
   onProgress("Checking configurations...");
+  const ai = getAIClient(config);
+  const modelName = config.model;
 
-  return executeWithFailover(config, "Generate Note", onProgress, async (model, ai) => {
-      
-      // --- 1. COMPREHENSIVE MODE: MEGA-PROMPT STRATEGY (OPTIMIZED FOR FREE TIER) ---
-      if (config.mode === NoteMode.COMPREHENSIVE) {
-         onProgress(`COMPREHENSIVE MODE (${model}): Generating Full Chapter (Mega-Prompt)...`);
-         
-         // Construct the Mega Prompt
-         const megaPrompt = `
-         CONTEXT: We are writing a Medical Textbook Chapter on "${topic}".
-         
-         FULL CHAPTER OUTLINE TO GENERATE:
-         ${structure}
-         
-         ***CRITICAL WRITING INSTRUCTIONS (STRICT)***:
-         1. **ONE CONTINUOUS OUTPUT:** Write the ENTIRE chapter based on the outline above in a single response.
-         2. **LENGTH & DEPTH:** Do NOT summarize. This must be a "Deep Dive". Aim for maximum detail allowed by your output limit.
-         3. **STRUCTURE PER SECTION:**
-            - Start with a functional definition.
-            - Explain PATHOPHYSIOLOGY in detail.
-            - Provide CLINICAL CORRELATIONS.
-            - Include PHARMACOLOGY if relevant.
-         4. **FORMATTING:**
-            - Use Markdown Headers (#, ##, ###) exactly as requested in the outline.
-            - Use Bold for key terms.
-            - Use Tables for comparisons.
-            - Use ">>>" for clinical pearls.
-         5. **NO HALLUCINATIONS:** If you don't know a specific detail, state general principles.
-         
-         ${config.customContentPrompt ? `USER SPECIAL INSTRUCTION: ${config.customContentPrompt}` : ''}
-         
-         OUTPUT THE FULL CHAPTER CONTENT NOW.
-         `;
+  onProgress(`Connecting to ${modelName} in ${config.mode.toUpperCase()} mode...`);
 
-         const parts: any[] = [{ text: megaPrompt }];
-         if (files && files.length > 0) {
-             files.forEach(f => {
-                 if (f.mimeType === 'text/plain') {
-                     // Decode Base64 text and append as context
-                     try {
-                         const decodedText = decodeURIComponent(escape(atob(f.data)));
-                         parts.push({ text: `\n\nREFERENCE MATERIAL (${f.name}):\n${decodedText}\n\n` });
-                     } catch (e) {
-                         console.warn(`Failed to decode text file ${f.name}`, e);
-                     }
-                 } else {
-                     // Standard binary handling (Images, etc.)
-                     parts.push({ inlineData: { mimeType: f.mimeType, data: f.data } });
-                 }
-             });
-         }
+  try {
+    // --- 1. COMPREHENSIVE MODE: SEQUENTIAL BATCH GENERATION ---
+    if (config.mode === NoteMode.COMPREHENSIVE) {
+       onProgress("COMPREHENSIVE MODE: Analyzing Blueprint Structure...");
+       
+       // IMPROVED SPLITTING LOGIC (ROBUST): 
+       // Split by top-level headers (# or ##)
+       const rawSections = structure.split(/(?=^#{1,2}\s)/gm).filter(s => s.trim().length > 0);
+       
+       let fullContent = `> [!abstract] COMPREHENSIVE TEXTBOOK: ${topic.toUpperCase()}\n\n`;
+       fullContent += `_Generated via NeuroNote Batch Engine (${rawSections.length} Sections)_\n\n---\n\n`;
 
-         // Use maximum output tokens allowed
-         const response = await ai.models.generateContent({
-             model: model, 
-             contents: { parts },
-             config: { temperature: 0.2, maxOutputTokens: 8192 } 
-         });
-         
-         const fullContent = response.text || "> [!danger] GENERATION FAILED.";
-         
-         onProgress("Finalizing & Formatting Textbook...");
-         return processGeneratedNote(fullContent);
-      }
+       // Robust Loop: Don't let one failure stop the whole book
+       for (let i = 0; i < rawSections.length; i++) {
+           const rawText = rawSections[i].trim();
+           
+           try {
+               // Extract Title (first line) vs Context (rest of the text)
+               const lines = rawText.split('\n');
+               const sectionTitle = lines[0].replace(/^#+\s*/, '').trim();
+               const sectionContext = lines.slice(1).join('\n').trim();
 
-      // --- 2. STANDARD MODES ---
-      const textPrompt = getStrictPrompt(topic, structure, config.mode, config.customContentPrompt);
-      const parts: any[] = [{ text: textPrompt }];
+               // Skip empty headers or "Introduction" if it's too short
+               if (lines.length < 2 && rawSections.length > 3 && sectionTitle.toLowerCase().includes('intro')) {
+                   // Optional skip logic
+               }
 
-      if (files && files.length > 0) {
-        files.forEach(file => {
-          if (file.mimeType === 'text/plain') {
-              try {
-                  const decodedText = decodeURIComponent(escape(atob(file.data)));
-                  parts.push({ text: `\n\nREFERENCE MATERIAL (${file.name}):\n${decodedText}\n\n` });
-              } catch (e) {
-                  console.warn(`Failed to decode text file ${file.name}`, e);
-              }
-          } else {
-              parts.push({
-                inlineData: {
-                  mimeType: file.mimeType,
-                  data: file.data
-                }
-              });
+               onProgress(`[Batch ${i+1}/${rawSections.length}] Researching & Writing: "${sectionTitle}"...`);
+               
+               // Generate specific section with internal retry
+               let sectionContent = "";
+               let attempts = 0;
+               while (attempts < 2 && !sectionContent) {
+                   try {
+                       sectionContent = await generateBatchSection(
+                           ai, 
+                           config, 
+                           topic, 
+                           sectionTitle, 
+                           sectionContext || "Cover all standard aspects of this sub-topic.", 
+                           files
+                       );
+                   } catch (err) {
+                       attempts++;
+                       console.warn(`Batch attempt ${attempts} failed for ${sectionTitle}`, err);
+                       await new Promise(r => setTimeout(r, 2000)); // Wait before retry
+                   }
+               }
+               
+               if (!sectionContent) sectionContent = "> [!danger] GENERATION FAILED FOR THIS SECTION.";
+
+               // Append with a clear divider
+               fullContent += `\n# ${sectionTitle}\n\n${sectionContent}\n\n`;
+               
+               // Rate Limit Buffer
+               await new Promise(r => setTimeout(r, 1500));
+
+           } catch (batchError) {
+               console.error(`Error processing batch ${i}:`, batchError);
+               fullContent += `\n> [!warning] Skipped Section due to error.\n\n`;
+           }
+       }
+
+       onProgress("Finalizing & Formatting Textbook...");
+       return processGeneratedNote(fullContent);
+    }
+
+    // --- 2. STANDARD MODES (General, Cheat Sheet) ---
+    const textPrompt = getStrictPrompt(topic, structure, config.mode, config.customContentPrompt);
+    
+    const parts: any[] = [{ text: textPrompt }];
+
+    if (files && files.length > 0) {
+      onProgress(`Processing ${files.length} attachment(s)...`);
+      files.forEach(file => {
+        parts.push({
+          inlineData: {
+            mimeType: file.mimeType,
+            data: file.data
           }
         });
-      }
-
-      onProgress(`Synthesizing content (${model})...`);
-      
-      const response = await ai.models.generateContent({
-        model: model,
-        contents: { parts },
-        config: {
-          temperature: config.temperature,
-          topP: 0.95,
-          topK: 40,
-          maxOutputTokens: 65536, 
-        }
       });
+    }
 
-      const rawText = response.text;
-      if (!rawText) throw new Error("Received empty response from AI.");
+    onProgress("Synthesizing content (Standard Mode)...");
+    
+    const response = await ai.models.generateContent({
+      model: modelName,
+      contents: { parts },
+      config: {
+        temperature: config.temperature,
+        topP: 0.95,
+        topK: 40,
+        maxOutputTokens: 65536, 
+      }
+    });
 
-      onProgress("Formatting & Cleaning Mermaid syntax...");
-      return processGeneratedNote(rawText);
-  });
+    const rawText = response.text;
+
+    if (!rawText) {
+      throw new Error("Received empty response from AI.");
+    }
+
+    onProgress("Formatting & Cleaning Mermaid syntax...");
+    const finalContent = processGeneratedNote(rawText);
+
+    return finalContent;
+
+  } catch (error: any) {
+    console.error("Gemini API Error:", error);
+    if (error.message?.includes("429")) {
+      throw new Error("Quota Exceeded (429). Please wait a moment or rotate keys.");
+    }
+    // Handle 404 specifically for clearer UX
+    if (error.message?.includes("404")) {
+       throw new Error(`Model not found (404). The model '${config.model}' may not be available in your account/region or the API Key is invalid.`);
+    }
+    throw error;
+  }
 };
 
 /* -------------------------------------------------------------------------- */
@@ -259,24 +265,19 @@ export const parseSyllabusToTopics = async (
   const modelName = config.model.includes('gemini') ? config.model : 'gemini-3-flash-preview';
 
   try {
-    const parts: any[] = [{ text: SYLLABUS_PROMPT }];
-    
-    if (file.mimeType === 'text/plain') {
-        try {
-            const decodedText = decodeURIComponent(escape(atob(file.data)));
-            parts.push({ text: `\n\nSYLLABUS CONTENT:\n${decodedText}` });
-        } catch (e) {
-            console.warn("Failed to decode syllabus text", e);
-            // Fallback to inlineData if decode fails (unlikely)
-            parts.push({ inlineData: { mimeType: file.mimeType, data: file.data } });
-        }
-    } else {
-        parts.push({ inlineData: { mimeType: file.mimeType, data: file.data } });
-    }
-
     const response = await ai.models.generateContent({
       model: modelName,
-      contents: { parts },
+      contents: {
+        parts: [
+          { text: SYLLABUS_PROMPT },
+          {
+            inlineData: {
+              mimeType: file.mimeType,
+              data: file.data
+            }
+          }
+        ]
+      },
       config: {
         temperature: 0.2, 
         responseMimeType: "application/json"
@@ -284,21 +285,8 @@ export const parseSyllabusToTopics = async (
     });
 
     const text = response.text || "[]";
-    
-    // ROBUST PARSING: Extract JSON Array first
-    const jsonMatch = text.match(/\[[\s\S]*\]/);
-    const cleanJson = jsonMatch ? jsonMatch[0] : text.replace(/```json/g, '').replace(/```/g, '').trim();
-    
-    let topics: string[] = [];
-    try {
-        topics = JSON.parse(cleanJson);
-    } catch (e) {
-        // Fallback: Try splitting by newlines if it looks like a list
-        console.warn("JSON Parse Failed, attempting fallback split", e);
-        topics = text.split('\n')
-            .map(t => t.replace(/^\d+[\.\)]\s*/, '').replace(/^- /, '').trim())
-            .filter(t => t.length > 0 && !t.startsWith('[') && !t.startsWith('TASK') && !t.startsWith('GOAL'));
-    }
+    const cleanJson = text.replace(/```json/g, '').replace(/```/g, '').trim();
+    const topics: string[] = JSON.parse(cleanJson);
 
     return topics.map((t, index) => ({
       id: `topic-${Date.now()}-${index}`,
@@ -332,21 +320,8 @@ export const parseSyllabusFromText = async (
     });
 
     const text = response.text || "[]";
-    
-    // ROBUST PARSING: Extract JSON Array first
-    const jsonMatch = text.match(/\[[\s\S]*\]/);
-    const cleanJson = jsonMatch ? jsonMatch[0] : text.replace(/```json/g, '').replace(/```/g, '').trim();
-    
-    let topics: string[] = [];
-    try {
-        topics = JSON.parse(cleanJson);
-    } catch (e) {
-        // Fallback: Try splitting by newlines if it looks like a list
-        console.warn("JSON Parse Failed, attempting fallback split", e);
-        topics = text.split('\n')
-            .map(t => t.replace(/^\d+[\.\)]\s*/, '').replace(/^- /, '').trim())
-            .filter(t => t.length > 0 && !t.startsWith('[') && !t.startsWith('TASK') && !t.startsWith('GOAL'));
-    }
+    const cleanJson = text.replace(/```json/g, '').replace(/```/g, '').trim();
+    const topics: string[] = JSON.parse(cleanJson);
 
     return topics.map((t, index) => ({
       id: `topic-${Date.now()}-${index}`,
@@ -457,5 +432,75 @@ export const generateChatResponse = async (
   } catch (e: any) {
       console.error("Chat Error", e);
       return "Error generating chat response: " + e.message;
+  }
+};
+
+/* -------------------------------------------------------------------------- */
+/*                       ASSISTANT PANEL ENGINE                               */
+/* -------------------------------------------------------------------------- */
+
+export const generateAssistantResponse = async (
+  config: GenerationConfig,
+  currentContent: string,
+  history: ChatMessage[],
+  files: UploadedFile[]
+): Promise<string> => {
+  const ai = getAIClient(config);
+  const modelName = config.model.includes('gemini') ? config.model : 'gemini-3-flash-preview';
+
+  const systemPrompt = `
+  ROLE: Intelligent Medical Assistant (Neuro-Sidekick).
+  CONTEXT: The user is working on a medical note.
+  CURRENT NOTE CONTENT:
+  """
+  ${currentContent.substring(0, 20000)} ... (truncated)
+  """
+
+  INSTRUCTION:
+  - Provide a direct, high-quality response to the user's request.
+  - If asked to add content, write it in Markdown format matching the note's style.
+  - If asked to summarize, provide a concise summary.
+  - Do NOT repeat the user's prompt.
+
+  *** TOOL CAPABILITIES ***
+  - You can create sticky notes for the user. 
+  - To create a sticky note, output: {{STICKY: content}} or {{STICKY|color: content}} (colors: yellow, blue, green, pink).
+  - Example: {{STICKY|blue: Review this mechanism later}}
+  `;
+
+  // Convert history to Gemini format
+  // System prompt goes to systemInstruction or first content part?
+  // For Gemini 1.5/Pro, systemInstruction is preferred in config.
+  // But here we are using generateContent (single turn) or chats.create (multi turn).
+  // Let's use chats.create for true history support.
+
+  try {
+      const chat = ai.chats.create({
+          model: modelName,
+          config: {
+              systemInstruction: systemPrompt,
+              temperature: 0.4,
+          },
+          history: history.slice(0, -1).map(msg => ({
+              role: msg.role,
+              parts: [{ text: msg.content }]
+          }))
+      });
+
+      const lastMessage = history[history.length - 1];
+      const parts: any[] = [{ text: lastMessage.content }];
+      
+      if (files && files.length > 0) {
+          files.forEach(f => parts.push({ inlineData: { mimeType: f.mimeType, data: f.data } }));
+      }
+
+      const result = await chat.sendMessage({ message: parts });
+      return result.text || "No response generated.";
+
+  } catch (e: any) {
+      console.error("Assistant Error", e);
+      // Fallback to single turn if chat fails (e.g. some models might have issues)
+      // Or just throw
+      throw new Error("Assistant failed: " + e.message);
   }
 };

@@ -110,23 +110,31 @@ const Mermaid: React.FC<MermaidProps> = ({ chart, onChartChange }) => {
     if (!svgElement) return;
     
     const serializer = new XMLSerializer();
-    let source = serializer.serializeToString(svgElement);
-
-    // Ensure XML namespace exists
-    if(!source.match(/^<svg[^>]+xmlns="http\:\/\/www\.w3\.org\/2000\/svg"/)){
-        source = source.replace(/^<svg/, '<svg xmlns="http://www.w3.org/2000/svg"');
-    }
-    
+    const source = serializer.serializeToString(svgElement);
     const svgBlob = new Blob([source], {type:"image/svg+xml;charset=utf-8"});
     const url = URL.createObjectURL(svgBlob);
     
-    const a = document.createElement("a");
-    a.href = url;
-    a.download = `diagram_${Date.now()}.svg`;
-    document.body.appendChild(a);
-    a.click();
-    document.body.removeChild(a);
-    URL.revokeObjectURL(url);
+    const img = new Image();
+    img.onload = function() {
+        const canvas = document.createElement("canvas");
+        const bbox = svgElement.getBBox();
+        const scale = 2; // High res export
+        canvas.width = (bbox.width + 40) * scale;
+        canvas.height = (bbox.height + 40) * scale;
+        const ctx = canvas.getContext("2d");
+        if(ctx) {
+            ctx.fillStyle = "#ffffff"; 
+            ctx.fillRect(0, 0, canvas.width, canvas.height);
+            ctx.scale(scale, scale);
+            ctx.drawImage(img, 20, 20); // Add padding
+            const pngUrl = canvas.toDataURL("image/png");
+            const a = document.createElement("a");
+            a.href = pngUrl;
+            a.download = `diagram_${Date.now()}.png`;
+            a.click();
+        }
+    };
+    img.src = url;
   };
 
   if (status === 'error' && !isEditing) {
@@ -183,7 +191,7 @@ const Mermaid: React.FC<MermaidProps> = ({ chart, onChartChange }) => {
                 <div className="w-[1px] h-3 bg-gray-300 mx-1"></div>
                 
                 <button onClick={() => setIsEditing(true)} className="p-1.5 hover:bg-gray-200 rounded text-gray-600 hover:text-blue-600" title="Edit Source"><Edit2 size={13}/></button>
-                <button onClick={downloadImage} className="p-1.5 hover:bg-gray-200 rounded text-gray-600" title="Download SVG"><ImageIcon size={13}/></button>
+                <button onClick={downloadImage} className="p-1.5 hover:bg-gray-200 rounded text-gray-600" title="Download PNG"><ImageIcon size={13}/></button>
                 
                 <div className="w-[1px] h-3 bg-gray-300 mx-1"></div>
                 

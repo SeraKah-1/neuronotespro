@@ -212,7 +212,7 @@ const NeuralVault: React.FC<NeuralVaultProps> = ({ onSelectNote, onImportCloud }
                             
                             <h3 className="font-bold text-white mb-1 truncate">{note.topic}</h3>
                             <p className="text-xs text-gray-500 line-clamp-2 mb-3 h-8">
-                                {note.content ? note.content.substring(0, 150).replace(/[#*`]/g, '') : "Content available in cloud..."}
+                                {note.snippet || (note.content ? note.content.substring(0, 150).replace(/[#*`]/g, '') : "Content available in cloud...")}
                             </p>
                             
                             <div className="flex justify-between items-center text-[10px] text-gray-600">

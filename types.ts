@@ -1,41 +1,13 @@
 
-export interface KnowledgeSource {
-  id: string;
-  name: string;
-  type: 'drive' | 'local_folder' | 'pdf_collection' | 'local_file'; // Added local_file
-  status: 'syncing' | 'ready' | 'error' | 'disconnected';
-  lastSync: number;
-  fileCount: number;
-  sizeBytes: number;
-  icon?: string;
-  config?: {
-    driveFolderId?: string;
-    folderPath?: string;
-  };
-}
-
 export interface LibraryMaterial {
   id: string;
   created_at?: string;
-  updated_at?: string; // Added to match DB
   title: string;
   content: string; // Base64 or Raw Text
   processed_content?: string; // Summary/AI Processed
   file_type: string;
   tags?: string[];
   size?: number; // Optional helper for UI
-}
-
-export interface KnowledgeFile {
-  id: string;
-  sourceId: string;
-  name: string;
-  type: string;
-  size: number;
-  indexed: boolean; // aka isTokenized
-  contentSnippet?: string; // First 100 chars for preview
-  vectorId?: string; // Future proofing for true RAG
-  data?: string; // NEW: Base64 data for local RAG usage
 }
 
 export enum NoteMode {
@@ -119,7 +91,8 @@ export interface NoteData {
   topic: string;
   files: UploadedFile[];
   structure: string;
-  updated_at?: number; // Added for consistency
+  structureProvider?: AIProvider;
+  structureModel?: string;
 }
 
 export enum AppView {
@@ -127,8 +100,7 @@ export enum AppView {
   SYLLABUS = 'syllabus',
   KNOWLEDGE = 'knowledge',
   ARCHIVE = 'archive',
-  SETTINGS = 'settings',
-  CANVAS = 'canvas'
+  SETTINGS = 'settings'
 }
 
 export interface AppState {
@@ -143,14 +115,13 @@ export interface AppState {
 export interface StickyNote {
   id: string;
   text: string;
-  color: string; // e.g. 'bg-yellow-100'
+  color: 'yellow' | 'blue' | 'green' | 'pink';
   timestamp: number;
 }
 
 export interface HistoryItem {
   id: string;
   timestamp: number;
-  updated_at?: number; // Added to match DB
   topic: string;
   mode: NoteMode;
   content: string;
@@ -158,9 +129,12 @@ export interface HistoryItem {
   parentId: string | null;
   folderId?: string;
   tags?: string[];
-  attached_context_ids?: string[]; // New: For Micro-RAG context linking
-  stickies?: StickyNote[]; // New: For Tangential Knowledge
   _status?: 'local' | 'synced' | 'cloud';
+  snippet?: string;
+  metadata?: {
+    stickies: StickyNote[];
+    contextFiles: any[];
+  };
 }
 
 export interface Folder {
@@ -203,18 +177,17 @@ export interface NeuroKeyFile {
   };
 }
 
-export interface QuizQuestion {
-  question: string;
-  options: string[];
-  correctIndex: number;
-  explanation: string;
-}
-
 export enum AppTheme {
   CLINICAL_CLEAN = 'clinical_clean',
   ACADEMIC_PAPER = 'academic_paper',
   SEPIA_FOCUS = 'sepia_focus'
 }
+
+export const GEMINI_MODELS_LIST = [
+  { value: AppModel.GEMINI_3_PRO, label: 'Gemini 3.0 Pro' },
+  { value: AppModel.GEMINI_3_FLASH, label: 'Gemini 3.0 Flash' },
+  { value: AppModel.GEMINI_2_5_FLASH, label: 'Gemini 2.5 Flash' },
+];
 
 export const MODE_STRUCTURES: Record<NoteMode, string> = {
   [NoteMode.GENERAL]: "# 1. Definition\n# 2. Pathophysiology\n# 3. Clinical Features\n# 4. Diagnosis\n# 5. Management",

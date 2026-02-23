@@ -7,7 +7,7 @@ import {
   FileText, Trash2, Edit2, UploadCloud, RefreshCw, Clock, Search, 
   ChevronDown, ChevronRight, Tag, Cloud, Laptop, CheckCircle2, 
   Folder as FolderIcon, FolderPlus, MoreHorizontal, CornerDownRight, 
-  Grid, Plus, FilePlus, CloudDownload
+  Grid, Plus, FilePlus
 } from 'lucide-react';
 
 interface FileSystemProps {
@@ -41,15 +41,10 @@ const FileSystem: React.FC<FileSystemProps> = ({ onSelectNote, activeNoteId }) =
   const refreshData = useCallback(async () => {
     setLoading(true);
     try {
-        // 1. Sync Metadata from Cloud (if connected)
-        if (storage.isCloudReady()) {
-            await storage.syncNotesFromCloud();
-        }
-
-        // 2. Load Local Metadata (now merged)
-        const n = storage.getLocalNotesMetadata();
-        // Sort by updated_at if available, otherwise timestamp
-        n.sort((a, b) => (b.updated_at || b.timestamp) - (a.updated_at || a.timestamp));
+        // PERF FIX: Load metadata ONLY. Do not load full content strings into the list view.
+        // UPDATED: Use getUnifiedNotes to trigger Cloud Sync if connected
+        const n = await storage.getUnifiedNotes();
+        n.sort((a, b) => b.timestamp - a.timestamp);
         setNotes([...n]);
         
         const f = storage.getFolders();
@@ -64,53 +59,16 @@ const FileSystem: React.FC<FileSystemProps> = ({ onSelectNote, activeNoteId }) =
   useEffect(() => {
     refreshData();
     
-    // REALTIME SUBSCRIPTION
-    const sub = storage.subscribeToNotes((payload) => {
-        console.log("Realtime Update:", payload);
-        // Simple strategy: Refresh all data on any change
-        // In a production app, we would merge the payload delta
-        refreshData();
-        
-        if (payload.eventType === 'INSERT') {
-            notifications.send("New Note", `Note "${payload.new.topic}" added via sync.`, "sync-success");
-        }
-    });
-
     const handleClickOutside = (event: MouseEvent) => {
       if (menuRef.current && !menuRef.current.contains(event.target as Node)) {
         setActiveMenuId(null);
       }
     };
     document.addEventListener('mousedown', handleClickOutside);
-    
-    return () => {
-        document.removeEventListener('mousedown', handleClickOutside);
-        if (sub) sub.unsubscribe();
-    };
-  }, [refreshData, storage, notifications]);
+    return () => document.removeEventListener('mousedown', handleClickOutside);
+  }, [refreshData]);
 
   // --- ACTIONS ---
-  const handleForceSync = async () => {
-    setLoading(true);
-    try {
-        if (!storage.isCloudReady()) {
-            alert("Cloud storage not connected. Please check Settings.");
-            return;
-        }
-        await storage.syncNotesFromCloud();
-        // Force reload from DB
-        const n = storage.getLocalNotesMetadata();
-        n.sort((a, b) => (b.updated_at || b.timestamp) - (a.updated_at || a.timestamp));
-        setNotes([...n]);
-        notifications.send("Cloud Sync", "Notes synchronized from cloud.", "sync-success");
-    } catch (e: any) {
-        console.error("Sync Error:", e);
-        alert("Sync failed: " + e.message);
-    } finally {
-        setLoading(false);
-    }
-  };
-
   const handleDeleteNote = async (note: HistoryItem) => {
     if (confirm(`🗑️ Delete "${note.topic}"?`)) {
       try {
@@ -263,7 +221,6 @@ const FileSystem: React.FC<FileSystemProps> = ({ onSelectNote, activeNoteId }) =
          <div className="flex justify-between items-center">
             <span className="text-[10px] font-bold text-[var(--ui-text-muted)] uppercase tracking-widest">Explorer</span>
             <div className="flex gap-1">
-                <button onClick={handleForceSync} className="p-1.5 hover:bg-[var(--ui-bg)] rounded text-[var(--ui-text-muted)] hover:text-cyan-500" title="Force Cloud Sync"><CloudDownload size={14}/></button>
                 <button onClick={handleCreateFolder} className="p-1.5 hover:bg-[var(--ui-bg)] rounded text-[var(--ui-text-muted)] hover:text-[var(--ui-text-main)]" title="New Folder"><FolderPlus size={14}/></button>
                 <button onClick={refreshData} className="p-1.5 hover:bg-[var(--ui-bg)] rounded text-[var(--ui-text-muted)] hover:text-[var(--ui-text-main)]" title="Refresh"><RefreshCw size={14} className={loading ? 'animate-spin' : ''}/></button>
             </div>

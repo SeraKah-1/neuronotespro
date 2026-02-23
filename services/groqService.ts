@@ -1,6 +1,6 @@
 
 import Groq from 'groq-sdk';
-import { GenerationConfig, SyllabusItem } from '../types';
+import { GenerationConfig, SyllabusItem, ChatMessage } from '../types';
 import { getStrictPrompt, UNIVERSAL_STRUCTURE_PROMPT } from '../utils/prompts';
 import { processGeneratedNote } from '../utils/formatter';
 
@@ -27,22 +27,13 @@ const getGroqClient = (apiKeyString: string) => {
  * Fetch available models from Groq API
  * Equivalent to Python: requests.get("https://api.groq.com/openai/v1/models", ...)
  */
-export const fetchGroqModels = async (apiKeyString?: string): Promise<{id: string, object: string}[]> => {
+export const fetchGroqModels = async (apiKeyString: string): Promise<{id: string, object: string}[]> => {
     let finalKey = apiKeyString;
-    
-    // Fallback to env var if not provided (matching os.environ.get)
-    if (!finalKey) {
-        finalKey = (import.meta as any).env?.VITE_GROQ_API_KEY || (typeof process !== 'undefined' ? process.env.GROQ_API_KEY : '');
-    }
-
-    if (finalKey && (finalKey.includes(',') || finalKey.includes('\n'))) {
+    if (finalKey.includes(',') || finalKey.includes('\n')) {
         finalKey = finalKey.split(/[\n,]+/).map(k => k.trim())[0]; // Use first key for fetching list
     }
 
-    if (!finalKey) {
-        console.warn("No Groq API Key available for fetching models.");
-        return [];
-    }
+    if (!finalKey) return [];
 
     try {
         const response = await fetch("https://api.groq.com/openai/v1/models", {
@@ -58,10 +49,6 @@ export const fetchGroqModels = async (apiKeyString?: string): Promise<{id: strin
         }
 
         const data = await response.json();
-        
-        // Log raw response as requested (print(response.json()))
-        console.log("Groq Models API Response:", data);
-
         return data.data || [];
     } catch (error) {
         console.error("Failed to fetch dynamic Groq models:", error);
@@ -131,7 +118,7 @@ export const generateNoteContentGroq = async (
       model: modelName,
       temperature: config.temperature,
       // Groq currently caps output tokens at 8192 for most models
-      max_completion_tokens: 8192, 
+      max_tokens: 8192, 
       top_p: 1,
       stream: false
     });
@@ -231,10 +218,8 @@ export const parseSyllabusFromTextGroq = async (
     });
 
     const text = completion.choices[0]?.message?.content || "[]";
-    
-    // ROBUST PARSING: Extract JSON Array first
-    const jsonMatch = text.match(/\[[\s\S]*\]/);
-    const cleanJson = jsonMatch ? jsonMatch[0] : text.replace(/```json/g, '').replace(/```/g, '').trim();
+    // Clean potential markdown code blocks
+    const cleanJson = text.replace(/```json/g, '').replace(/```/g, '').trim();
     
     // Attempt parse
     let topics: string[] = [];
@@ -242,10 +227,9 @@ export const parseSyllabusFromTextGroq = async (
         topics = JSON.parse(cleanJson);
     } catch(e) {
         // Fallback: split by newlines if JSON fails but list looks okay
-        console.warn("Groq JSON Parse Failed, attempting fallback split", e);
-        topics = text.split('\n')
-          .map(t => t.replace(/^\d+[\.\)]\s*/, '').replace(/^- /, '').trim()) // Remove "1. " or "1) "
-          .filter(t => t.length > 0 && !t.startsWith('[') && !t.startsWith('TASK') && !t.startsWith('GOAL'));
+        topics = cleanJson.split('\n')
+          .map(t => t.replace(/^\d+[\.\)]\s*/, '').trim()) // Remove "1. " or "1) "
+          .filter(t => t.length > 0 && !t.startsWith('['));
     }
 
     return topics.map((t, index) => ({
@@ -305,5 +289,62 @@ export const refineNoteContentGroq = async (
   } catch (e: any) {
     console.error("Groq Refinement Error", e);
     throw new Error("Failed to refine content: " + e.message);
+  }
+};
+
+/* -------------------------------------------------------------------------- */
+/*                       ASSISTANT PANEL ENGINE (GROQ)                        */
+/* -------------------------------------------------------------------------- */
+
+export const generateAssistantResponseGroq = async (
+  config: GenerationConfig,
+  currentContent: string,
+  history: ChatMessage[],
+  files: any[] // Placeholder for consistency
+): Promise<string> => {
+  const envKey = (import.meta as any).env?.VITE_GROQ_API_KEY || (typeof process !== 'undefined' ? process.env.GROQ_API_KEY : '');
+  const apiKey = config.groqApiKey || envKey;
+  if (!apiKey) throw new Error("Groq API Key Missing");
+
+  const groq = getGroqClient(apiKey);
+  const modelName = config.model || 'llama-3.3-70b-versatile';
+
+  const systemPrompt = `
+  ROLE: Intelligent Medical Assistant (Neuro-Sidekick).
+  CONTEXT: The user is working on a medical note.
+  CURRENT NOTE CONTENT:
+  """
+  ${currentContent.substring(0, 20000)} ... (truncated)
+  """
+
+  INSTRUCTION:
+  - Provide a direct, high-quality response to the user's request.
+  - If asked to add content, write it in Markdown format matching the note's style.
+  - If asked to summarize, provide a concise summary.
+  - Do NOT repeat the user's prompt.
+
+  *** TOOL CAPABILITIES ***
+  - You can create sticky notes for the user. 
+  - To create a sticky note, output: {{STICKY: content}} or {{STICKY|color: content}} (colors: yellow, blue, green, pink).
+  - Example: {{STICKY|blue: Review this mechanism later}}
+  `;
+
+  try {
+      const messages = [
+          { role: "system", content: systemPrompt },
+          ...history.map(msg => ({ role: msg.role === 'model' ? 'assistant' : msg.role, content: msg.content }))
+      ];
+
+      const completion = await groq.chat.completions.create({
+          messages: messages as any,
+          model: modelName,
+          temperature: 0.4,
+          stream: false
+      });
+
+      return completion.choices[0]?.message?.content || "No response generated.";
+  } catch (e: any) {
+      console.error("Groq Assistant Error", e);
+      throw new Error("Assistant failed: " + e.message);
   }
 };
