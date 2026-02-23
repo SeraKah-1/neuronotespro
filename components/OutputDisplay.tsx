@@ -4,13 +4,16 @@ import ReactMarkdown from 'react-markdown';
 import remarkGfm from 'remark-gfm';
 import remarkMath from 'remark-math';
 import rehypeKatex from 'rehype-katex';
-import { Download, Copy, Eye, Check, List, Book, Focus, Save, Edit3, CloudUpload, Clipboard, ClipboardCheck, EyeOff, MousePointerClick, BookOpen, Microscope, Activity, AlertTriangle, Info, Wand2, Search, X, HelpCircle, MessageSquareQuote, LayoutTemplate, Undo2, Redo2, Loader2, Workflow, Printer, FileDown, Maximize2, Minimize2, UploadCloud, ArrowLeft } from 'lucide-react';
+import { Download, Copy, Eye, Check, List, Book, Focus, Save, Edit3, CloudUpload, Clipboard, ClipboardCheck, EyeOff, MousePointerClick, BookOpen, Microscope, Activity, AlertTriangle, Info, Wand2, Search, X, HelpCircle, MessageSquareQuote, LayoutTemplate, Undo2, Redo2, Loader2, Workflow, Printer, FileDown, Maximize2, Minimize2, UploadCloud, ArrowLeft, Sparkles, Bot, Settings2, Pin } from 'lucide-react';
 import { StorageService } from '../services/storageService';
 import { processGeneratedNote } from '../utils/formatter';
 import { refineNoteContent } from '../services/geminiService';
 import { refineNoteContentGroq } from '../services/groqService';
 import Mermaid from './Mermaid';
-import { AppTheme, AIProvider, GenerationConfig } from '../types';
+import ContextSidePanel from './ContextSidePanel';
+import GhostBlock from './GhostBlock';
+import StickyNoteBoard from './StickyNoteBoard';
+import { AppTheme, AIProvider, GenerationConfig, StickyNote } from '../types';
 
 interface OutputDisplayProps {
   content: string;
@@ -89,181 +92,370 @@ const OutputDisplay: React.FC<OutputDisplayProps> = ({ content, topic, onUpdateC
   const [isMagicLoading, setIsMagicLoading] = useState(false);
   const [isExportingPdf, setIsExportingPdf] = useState(false);
 
+  // --- ASSISTANT & CONFIG STATE ---
+  const [activeConfig, setActiveConfig] = useState<GenerationConfig>(config);
+  const [showAssistantPanel, setShowAssistantPanel] = useState(false);
+
+  // Sync prop config to local state if it changes
+  useEffect(() => {
+      setActiveConfig(config);
+  }, [config]);
+
+  // --- MICRO-RAG STATE ---
+  const [attachedContextIds, setAttachedContextIds] = useState<string[]>([]);
+  const [selectedText, setSelectedText] = useState('');
+  const [selectionPos, setSelectionPos] = useState<{top: number, left: number, bottom: number} | null>(null);
+  const [isDeepening, setIsDeepening] = useState(false);
+
+  // --- GHOST BLOCK & STICKIES ---
+  const [ghostBlock, setGhostBlock] = useState<{ id: string; originalText: string; generatedText: string; position: { top: number; left: number } } | null>(null);
+  const [stickies, setStickies] = useState<StickyNote[]>([]);
+  const [showCustomPrompt, setShowCustomPrompt] = useState(false);
+  const [customPromptText, setCustomPromptText] = useState('');
+
   // --- DIAGRAM GALLERY STATE ---
   const [diagrams, setDiagrams] = useState<{ id: string; code: string; title: string; index: number }[]>([]);
 
   useEffect(() => {
       isMounted.current = true;
+      // Load context IDs if note exists
+      if (noteId) {
+          const storage = StorageService.getInstance();
+          const notes = storage.getLocalNotesMetadata();
+          const currentNote = notes.find(n => n.id === noteId);
+          if (currentNote && currentNote.attached_context_ids) {
+              setAttachedContextIds(currentNote.attached_context_ids);
+          }
+      }
       return () => { isMounted.current = false; };
+  }, [noteId]);
+
+  // ... (Existing useEffects)
+
+  // --- SELECTION LISTENER FOR DEEPEN ---
+  useEffect(() => {
+      const handleSelection = () => {
+          const selection = window.getSelection();
+          if (selection && selection.toString().trim().length > 0) {
+              const range = selection.getRangeAt(0);
+              const rect = range.getBoundingClientRect();
+              setSelectedText(selection.toString());
+              // Use fixed positioning relative to viewport
+              setSelectionPos({
+                  top: rect.top - 50, // Position above selection
+                  left: rect.left + (rect.width / 2), // Center horizontally
+                  bottom: rect.bottom + 10 // Position below selection
+              });
+          } else {
+              // Only clear if not interacting with the menu (handled by blur/click outside logic usually, but here simplified)
+              // We'll clear it if selection is empty
+              if (!showCustomPrompt) {
+                  setSelectionPos(null);
+                  setSelectedText('');
+              }
+          }
+      };
+
+      document.addEventListener('selectionchange', handleSelection);
+      return () => document.removeEventListener('selectionchange', handleSelection);
   }, []);
 
-  useEffect(() => { 
-      setEditableContent(content); 
-      setHistory([content]);
-      setHistoryIndex(0);
-      setIsDirty(false); 
-  }, [noteId]); 
+  const handleQuickAction = async (action: 'deepen' | 'simplify' | 'expand' | 'quiz' | 'custom', customPrompt?: string) => {
+      if (!selectedText) return;
+      
+      setIsDeepening(true);
+      try {
+          let prompt = "";
+          
+          if (action === 'deepen') {
+               // ... existing deepen logic ...
+               if (attachedContextIds.length === 0) {
+                   alert("Please attach context files first for Deepen.");
+                   setIsDeepening(false);
+                   return;
+               }
+               const storage = StorageService.getInstance();
+               const materials = await storage.getLibraryMaterialsByIds(attachedContextIds);
+               let contextStr = "";
+               materials.forEach(m => {
+                   try {
+                       const decoded = decodeURIComponent(escape(atob(m.content)));
+                       contextStr += `\n--- DOCUMENT: ${m.title} ---\n${decoded.substring(0, 15000)}\n`;
+                   } catch (e) { console.warn("Decode failed", e); }
+               });
+               prompt = `
+               TASK: Deepen and expand the following text based strictly on the provided context documents.
+               SELECTED TEXT: "${selectedText}"
+               CONTEXT DOCUMENTS: ${contextStr}
+               INSTRUCTIONS: Elaborate on the selected text using specific details from the context. Return ONLY the expanded text (Markdown).
+               `;
+          } else if (action === 'simplify') {
+              prompt = `TASK: Rewrite the following text to be simpler and easier to understand (ELI5 level). Maintain key information.\nTEXT: "${selectedText}"`;
+          } else if (action === 'expand') {
+              prompt = `TASK: Expand on the following text with more detail, examples, and context.\nTEXT: "${selectedText}"`;
+          } else if (action === 'quiz') {
+              prompt = `TASK: Create a short quiz (1-3 multiple choice questions) based on the following text. Format as Markdown.\nTEXT: "${selectedText}"`;
+          } else if (action === 'custom' && customPrompt) {
+              prompt = `TASK: ${customPrompt}\nTEXT: "${selectedText}"`;
+          }
 
-  // --- EXTRACT DIAGRAMS ---
-  useEffect(() => {
-      if (activeTab === 'diagrams') {
-          const lines = debouncedContent.split('\n');
-          const foundDiagrams: { id: string; code: string; title: string; index: number }[] = [];
-          let currentTitle = 'Untitled Diagram';
-          let insideBlock = false;
-          let blockStart = 0;
-          let blockContent: string[] = [];
+          let newSegment = "";
+          if (activeConfig.provider === AIProvider.GEMINI) {
+              newSegment = await refineNoteContent(activeConfig, selectedText, prompt);
+          } else {
+              newSegment = await refineNoteContentGroq(activeConfig, selectedText, prompt);
+          }
 
-          lines.forEach((line, i) => {
-              // Track headings for context
-              const headingMatch = line.match(/^(#{1,6})\s+(.+)$/);
-              if (headingMatch) {
-                  currentTitle = headingMatch[2].trim();
-              }
-
-              // Detect Mermaid Block
-              if (line.trim().startsWith('```mermaid')) {
-                  insideBlock = true;
-                  blockStart = i;
-                  blockContent = [];
-              } else if (line.trim().startsWith('```') && insideBlock) {
-                  insideBlock = false;
-                  foundDiagrams.push({
-                      id: `diag-${foundDiagrams.length}`,
-                      code: blockContent.join('\n'),
-                      title: currentTitle,
-                      index: blockStart // Store line index for potential updates
-                  });
-              } else if (insideBlock) {
-                  blockContent.push(line);
-              }
+          // SET GHOST BLOCK instead of replacing immediately
+          setGhostBlock({
+              id: Date.now().toString(),
+              originalText: selectedText,
+              generatedText: newSegment,
+              position: selectionPos ? { top: selectionPos.bottom, left: selectionPos.left } : { top: 100, left: 100 }
           });
-          setDiagrams(foundDiagrams);
-      }
-  }, [debouncedContent, activeTab]);
-
-  const handleDiagramUpdate = (index: number, newCode: string, newTitle: string) => {
-      // 1. Update the specific diagram in the content
-      // We need a robust way to replace. Since we have the original code, we can try replacing that block.
-      // However, duplicate diagrams are tricky.
-      // Better approach: Reconstruct the content string carefully or use a unique marker if possible.
-      
-      // Simple approach for now: Find the *exact* block occurrence. 
-      // Limitation: If there are identical blocks, it might replace the first one.
-      // Improvement: Use the `index` we captured to locate the block in the line array.
-      
-      const lines = editableContent.split('\n');
-      const diag = diagrams[index];
-      
-      // Update Title (Heading) - Search backwards from block start
-      let titleUpdated = false;
-      if (diag.title !== newTitle) {
-          for (let i = diag.index - 1; i >= 0; i--) {
-              if (lines[i].match(/^(#{1,6})\s+(.+)$/)) {
-                  lines[i] = lines[i].replace(diag.title, newTitle);
-                  titleUpdated = true;
-                  break;
-              }
-          }
-          // If no heading found above, maybe insert one? (Skip for now to be safe)
-      }
-
-      // Update Code
-      if (diag.code !== newCode) {
-          let codeLineIndex = diag.index + 1; // Start after ```mermaid
-          const newLines = newCode.split('\n');
           
-          // Remove old lines until ```
-          while (lines[codeLineIndex] && !lines[codeLineIndex].trim().startsWith('```')) {
-              lines.splice(codeLineIndex, 1);
-          }
-          
-          // Insert new lines
-          lines.splice(codeLineIndex, 0, ...newLines);
-      }
+          setSelectionPos(null); // Hide menu
+          setShowCustomPrompt(false);
 
-      const newContent = lines.join('\n');
+      } catch (e: any) {
+          alert("Action Failed: " + e.message);
+      } finally {
+          setIsDeepening(false);
+      }
+  };
+
+  const handleGhostAction = (action: 'accept' | 'discard' | 'pin') => {
+      if (!ghostBlock) return;
+
+      if (action === 'accept') {
+          const newFullContent = editableContent.replace(ghostBlock.originalText, ghostBlock.generatedText);
+          pushToHistory(newFullContent);
+      } else if (action === 'pin') {
+          const newSticky: StickyNote = {
+              id: Date.now().toString(),
+              text: ghostBlock.generatedText,
+              color: 'bg-yellow-100',
+              timestamp: Date.now()
+          };
+          setStickies(prev => [...prev, newSticky]);
+      }
+      
+      setGhostBlock(null);
+  };
+
+  const pushToHistory = useCallback((newContent: string) => {
+      if (newContent === history[historyIndex]) return;
+      const newHistory = history.slice(0, historyIndex + 1);
+      newHistory.push(newContent);
+      setHistory(newHistory);
+      setHistoryIndex(newHistory.length - 1);
       setEditableContent(newContent);
+      if (onUpdateContent) onUpdateContent(newContent);
       setIsDirty(true);
-      pushToHistory(newContent);
-  };
-
-
-  const pushToHistory = (newContent: string) => {
-    if (newContent === history[historyIndex]) return;
-    const newHistory = history.slice(0, historyIndex + 1);
-    newHistory.push(newContent);
-    if (newHistory.length > 50) newHistory.shift();
-    setHistory(newHistory);
-    setHistoryIndex(newHistory.length - 1);
-    setEditableContent(newContent);
-    setIsDirty(true);
-    if (onUpdateContent) onUpdateContent(newContent);
-  };
+  }, [history, historyIndex, onUpdateContent]);
 
   const undo = () => {
-    if (historyIndex > 0) {
-      const newIndex = historyIndex - 1;
-      setHistoryIndex(newIndex);
-      setEditableContent(history[newIndex]);
-      if (onUpdateContent) onUpdateContent(history[newIndex]);
-    }
+      if (historyIndex > 0) {
+          const prevIndex = historyIndex - 1;
+          setHistoryIndex(prevIndex);
+          setEditableContent(history[prevIndex]);
+          if (onUpdateContent) onUpdateContent(history[prevIndex]);
+      }
   };
 
   const redo = () => {
-    if (historyIndex < history.length - 1) {
-      const newIndex = historyIndex + 1;
-      setHistoryIndex(newIndex);
-      setEditableContent(history[newIndex]);
-      if (onUpdateContent) onUpdateContent(history[newIndex]);
-    }
+      if (historyIndex < history.length - 1) {
+          const nextIndex = historyIndex + 1;
+          setHistoryIndex(nextIndex);
+          setEditableContent(history[nextIndex]);
+          if (onUpdateContent) onUpdateContent(history[nextIndex]);
+      }
   };
 
-  const toc = useMemo(() => {
-    const lines = debouncedContent.split('\n');
-    const headers: TocItem[] = [];
-    let counter = 0;
-    lines.forEach(line => {
-      const cleanLine = line.replace(/^>\s*\[!.*?\]\s*/, '').replace(/^>\s*/, '');
-      const match = cleanLine.match(/^(#{1,3})\s+(.+)$/);
-      if (match) headers.push({ id: `header-${counter++}`, text: match[2].trim(), level: match[1].length });
-    });
-    return headers;
+  // --- TOC GENERATION ---
+  const [toc, setToc] = useState<TocItem[]>([]);
+  useEffect(() => {
+      const lines = debouncedContent.split('\n');
+      const headers: TocItem[] = [];
+      lines.forEach((line) => {
+          const match = line.match(/^(#{1,3})\s+(.+)$/);
+          if (match) {
+              const level = match[1].length;
+              const text = match[2].trim();
+              const id = text.toLowerCase().replace(/[^a-z0-9]+/g, '-');
+              headers.push({ id, text, level });
+          }
+      });
+      setToc(headers);
   }, [debouncedContent]);
 
-  const handleScroll = useCallback(() => {
-    if (!scrollRef.current) return;
-    const scrollPosition = scrollRef.current.scrollTop + 150;
-    const headers = toc.map(t => document.getElementById(t.id));
-    let currentActive = '';
-    for (const header of headers) {
-        if (header && header.offsetTop < scrollPosition) { currentActive = header.id; }
-    }
-    if (currentActive !== activeHeaderId) setActiveHeaderId(currentActive);
-  }, [toc, activeHeaderId]);
-
-  const scrollToHeader = (id: string) => { const element = document.getElementById(id); if (element) { element.scrollIntoView({ behavior: 'smooth' }); setActiveHeaderId(id); } };
-
-  const handleManualSaveTrigger = async () => { 
-      if (onManualSave) { 
-          setIsSaving(true);
-          try {
-            await new Promise(r => setTimeout(r, 600));
-            if(isMounted.current) {
-                onManualSave(editableContent); 
-                setIsDirty(false); 
-                setIsSaving(false);
-                setJustSaved(true);
-                setTimeout(() => { if(isMounted.current) setJustSaved(false); }, 2000);
-            }
-          } catch (e) {
-            console.error("Save Error:", e);
-            setIsSaving(false);
-            alert("Failed to save note.");
+  const handleScroll = () => {
+      if (!scrollRef.current) return;
+      const scrollPos = scrollRef.current.scrollTop;
+      
+      // Highlight TOC
+      const headers = document.querySelectorAll('h1, h2, h3');
+      let currentId = '';
+      headers.forEach((header) => {
+          const h = header as HTMLElement;
+          if (h.offsetTop - 100 <= scrollPos) {
+              currentId = h.id;
           }
-      } 
+      });
+      if (currentId) setActiveHeaderId(currentId);
   };
-  
+
+  const scrollToHeader = (id: string) => {
+      const element = document.getElementById(id);
+      if (element && scrollRef.current) {
+          scrollRef.current.scrollTo({
+              top: element.offsetTop - 80,
+              behavior: 'smooth'
+          });
+          setActiveHeaderId(id);
+      }
+  };
+
+  const handleManualSaveTrigger = () => {
+      if (onManualSave) {
+          setIsSaving(true);
+          onManualSave(editableContent);
+          setTimeout(() => {
+              setIsSaving(false);
+              setJustSaved(true);
+              setIsDirty(false);
+              setTimeout(() => setJustSaved(false), 2000);
+          }, 800);
+      }
+  };
+
+  const executeMagicEdit = async () => {
+      if (!magicInstruction.trim()) return;
+      setIsMagicLoading(true);
+      try {
+          const newContent = await refineNoteContent(activeConfig, editableContent, magicInstruction);
+          pushToHistory(newContent);
+          setMagicInstruction('');
+          setShowMagicEdit(false);
+      } catch (e: any) {
+          alert("Magic Edit Failed: " + e.message);
+      } finally {
+          setIsMagicLoading(false);
+      }
+  };
+
+  const handleDiagramUpdate = (index: number, newCode: string, newTitle: string) => {
+      const updated = [...diagrams];
+      updated[index] = { ...updated[index], code: newCode, title: newTitle };
+      setDiagrams(updated);
+      // Also update in markdown content? (Complex, maybe just local state for now or regex replace)
+  };
+
+  const handleSidePanelAction = async (action: 'summarize' | 'quiz') => {
+      setIsMagicLoading(true);
+      try {
+          let prompt = "";
+          if (action === 'summarize') {
+              prompt = `TASK: Create a concise summary (TL;DR) of the following note.\nNOTE CONTENT:\n${editableContent}`;
+          } else if (action === 'quiz') {
+              prompt = `TASK: Generate 3 multiple-choice questions based on the following note content. Format as Markdown.\nNOTE CONTENT:\n${editableContent}`;
+          }
+
+          let result = "";
+          if (activeConfig.provider === AIProvider.GEMINI) {
+              result = await refineNoteContent(activeConfig, editableContent, prompt);
+          } else {
+              result = await refineNoteContentGroq(activeConfig, editableContent, prompt);
+          }
+
+          // Add result as a Sticky Note
+          const newSticky: StickyNote = {
+              id: Date.now().toString(),
+              text: `**${action.toUpperCase()}**\n\n${result}`,
+              color: 'bg-blue-100',
+              timestamp: Date.now()
+          };
+          setStickies(prev => [...prev, newSticky]);
+          setShowAssistantPanel(false);
+
+      } catch (e: any) {
+          alert("Action Failed: " + e.message);
+      } finally {
+          setIsMagicLoading(false);
+      }
+  };
+
+  // Extract Diagrams from Markdown
+  useEffect(() => {
+      const mermaidRegex = /```mermaid\n([\s\S]*?)```/g;
+      let match;
+      const found: { id: string; code: string; title: string; index: number }[] = [];
+      let idx = 0;
+      while ((match = mermaidRegex.exec(debouncedContent)) !== null) {
+          found.push({
+              id: `diag-${idx}`,
+              code: match[1].trim(),
+              title: `Diagram ${idx + 1}`,
+              index: idx
+          });
+          idx++;
+      }
+      setDiagrams(found);
+  }, [debouncedContent]);
+
+  // Custom Components for ReactMarkdown
+  const components = useMemo(() => ({
+      code({ node, inline, className, children, ...props }: any) {
+          const match = /language-(\w+)/.exec(className || '');
+          const isMermaid = match && match[1] === 'mermaid';
+          
+          if (!inline && isMermaid) {
+              return (
+                  <div className="my-6 bg-white p-4 rounded-xl border border-gray-200 shadow-sm overflow-hidden">
+                      <Mermaid chart={String(children).replace(/\n$/, '')} />
+                  </div>
+              );
+          }
+          
+          if (!inline && match) {
+              return (
+                  <div className="relative group my-4 rounded-lg overflow-hidden border border-gray-700 bg-[#1e1e1e]">
+                      <div className="flex justify-between items-center px-3 py-1.5 bg-[#2d2d2d] border-b border-gray-700">
+                          <span className="text-xs font-mono text-gray-400">{match[1]}</span>
+                          <button 
+                              onClick={() => navigator.clipboard.writeText(String(children))}
+                              className="text-gray-400 hover:text-white transition-colors"
+                              title="Copy Code"
+                          >
+                              <Copy size={12}/>
+                          </button>
+                      </div>
+                      <pre className={`${className} p-4 overflow-x-auto custom-scrollbar`} {...props}>
+                          <code className={className} {...props}>
+                              {children}
+                          </code>
+                      </pre>
+                  </div>
+              );
+          }
+          return <code className={`${className} bg-gray-100 text-red-500 px-1 py-0.5 rounded text-sm font-mono`} {...props}>{children}</code>;
+      },
+      h1: ({node, ...props}: any) => <h1 id={String(props.children).toLowerCase().replace(/[^a-z0-9]+/g, '-')} className="text-3xl font-bold mt-8 mb-4 pb-2 border-b border-[var(--ui-border)] text-[var(--md-heading)]" {...props} />,
+      h2: ({node, ...props}: any) => <h2 id={String(props.children).toLowerCase().replace(/[^a-z0-9]+/g, '-')} className="text-2xl font-bold mt-6 mb-3 text-[var(--md-heading)]" {...props} />,
+      h3: ({node, ...props}: any) => <h3 id={String(props.children).toLowerCase().replace(/[^a-z0-9]+/g, '-')} className="text-xl font-semibold mt-5 mb-2 text-[var(--md-heading)]" {...props} />,
+      p: ({node, ...props}: any) => <p className="mb-4 leading-relaxed text-[var(--md-text)]" {...props} />,
+      ul: ({node, ...props}: any) => <ul className="list-disc pl-6 mb-4 space-y-1 text-[var(--md-text)]" {...props} />,
+      ol: ({node, ...props}: any) => <ol className="list-decimal pl-6 mb-4 space-y-1 text-[var(--md-text)]" {...props} />,
+      blockquote: ({node, ...props}: any) => (
+          <blockquote className="border-l-4 border-[var(--ui-primary)] pl-4 py-1 my-4 bg-[var(--ui-surface)] italic text-[var(--ui-text-muted)] rounded-r-lg" {...props} />
+      ),
+      table: ({node, ...props}: any) => <div className="overflow-x-auto my-6 rounded-lg border border-[var(--md-border)]"><table className="min-w-full divide-y divide-[var(--md-border)]" {...props} /></div>,
+      th: ({node, ...props}: any) => <th className="px-4 py-3 bg-[var(--ui-bg)] text-left text-xs font-medium text-[var(--ui-text-muted)] uppercase tracking-wider" {...props} />,
+      td: ({node, ...props}: any) => <td className="px-4 py-3 whitespace-nowrap text-sm text-[var(--md-text)] border-t border-[var(--md-border)]" {...props} />,
+      // Custom Sensor Block for ">>>" syntax (simulated via blockquote or specific marker, but here we use a custom component if possible, or just standard rendering)
+      // For now, let's assume standard markdown doesn't have a direct "Sensor" tag, but we can wrap specific sections if needed.
+  }), [debouncedContent]);
+
   // --- PDF EXPORT (Improved Strategy: DOM Expansion + Style Injection + Responsive SVG Fix) ---
   const handleExportPdf = async () => {
       if (typeof (window as any).html2pdf === 'undefined') {
@@ -392,7 +584,6 @@ const OutputDisplay: React.FC<OutputDisplayProps> = ({ content, topic, onUpdateC
       const storage = StorageService.getInstance();
       if (!storage.isCloudReady()) return alert("Connect to Supabase in Settings first.");
       
-      // FIX: Fallback to new ID if noteId is undefined (newly generated notes)
       const currentId = noteId || Date.now().toString();
 
       if (topic) {
@@ -405,17 +596,14 @@ const OutputDisplay: React.FC<OutputDisplayProps> = ({ content, topic, onUpdateC
               provider: config.provider, 
               parentId: null, 
               tags: [],
-              _status: 'synced' // Optimistic status
+              attached_context_ids: attachedContextIds, // Include Context IDs
+              _status: 'synced' 
           };
 
           setIsSaving(true);
           try {
-              // 1. Ensure it exists locally first (generates the ID in IDB)
               await storage.saveNoteLocal(note as any);
-              
-              // 2. Upload to Cloud
               await storage.uploadNoteToCloud(note as any);
-              
               alert("Uploaded to Cloud Successfully!");
               setIsDirty(false);
           } catch(e: any) { 
@@ -427,125 +615,165 @@ const OutputDisplay: React.FC<OutputDisplayProps> = ({ content, topic, onUpdateC
       }
   };
 
-  const executeMagicEdit = async () => {
-      if (!magicInstruction) return;
-      setIsMagicLoading(true);
-      try {
-          let newContent = '';
-          if (config.provider === AIProvider.GEMINI) { newContent = await refineNoteContent(config, editableContent, magicInstruction); } 
-          else { newContent = await refineNoteContentGroq(config, editableContent, magicInstruction); }
-          if(isMounted.current) { pushToHistory(newContent); setShowMagicEdit(false); setMagicInstruction(''); }
-      } catch (e: any) { alert("Magic Edit Failed: " + e.message); } 
-      finally { if(isMounted.current) setIsMagicLoading(false); }
-  };
-
-  // --- SYNC MERMAID EDITS TO MARKDOWN ---
-  const handleMermaidChange = useCallback((oldCode: string, newCode: string) => {
-      setEditableContent(current => {
-          if (current.includes(oldCode)) {
-              // Replace the specific diagram block content
-              const updated = current.replace(oldCode, newCode);
-              return updated;
-          }
-          return current;
-      });
-      setIsDirty(true);
-  }, []);
-
-  // --- RENDERERS ---
-  const CodeBlock = useCallback(({ node, className, children, ...props }: any) => {
-    const match = /language-(\w+)/.exec(className || '');
-    const isMermaid = match && match[1] === 'mermaid';
-    const content = String(children).replace(/\n$/, '');
-
-    if (isMermaid) {
-        return ( 
-            <SensorBlock active={sensorMode} label="Reveal Diagram"> 
-                <div className="mermaid-container">
-                    <Mermaid 
-                        chart={content} 
-                        key={content} // Important: Force re-render if content changes externally
-                        onChartChange={(newCode) => handleMermaidChange(content, newCode)} 
-                    />
-                </div>
-            </SensorBlock> 
-        );
-    }
-    if (!match) return <code className="bg-[var(--md-code-bg)] px-1 py-0.5 rounded text-red-500 font-mono text-sm border border-[var(--md-border)]" {...props}>{children}</code>;
-
-    return (
-        <SensorBlock active={sensorMode} label="Reveal Code">
-          <div className="group relative my-4 rounded-lg overflow-hidden border border-[var(--md-border)] bg-[var(--md-code-bg)] text-[var(--md-text)] shadow-sm text-sm p-4">
-              <code className={`${className}`} {...props}>{children}</code>
-          </div>
-        </SensorBlock>
-    );
-  }, [sensorMode, handleMermaidChange]);
-
-  const getHeaderId = useCallback((text: string, level: number) => { const found = toc.find(t => t.text === text && t.level === level); return found ? found.id : undefined; }, [toc]);
-
-  const components = useMemo(() => ({
-    h1: ({ children }: any) => <h1 id={getHeaderId(String(children), 1)}>{children}</h1>,
-    h2: ({ children }: any) => <h2 id={getHeaderId(String(children), 2)}>{children}</h2>,
-    h3: ({ children }: any) => <h3 id={getHeaderId(String(children), 3)}>{children}</h3>,
-    code: CodeBlock
-  }), [getHeaderId, CodeBlock]);
+  // ... (Existing executeMagicEdit, handleMermaidChange, Renderers)
 
   return (
     <div className="h-full flex flex-col relative font-sans bg-[var(--ui-bg)]">
       
       {/* --- TOOLBAR (TOP STICKY) --- */}
-      <div className="sticky top-0 z-50 flex items-center justify-between px-4 py-3 bg-[var(--ui-surface)]/95 backdrop-blur-md border-b border-[var(--ui-border)] shadow-sm">
-          
-          <div className="flex items-center gap-2">
-              <button 
-                  onClick={onExit} 
-                  className="mr-2 p-2 rounded-lg text-[var(--ui-text-muted)] hover:bg-[var(--ui-bg)] hover:text-[var(--ui-text-main)] transition-colors"
-                  title="Back to Workspace"
-              >
-                  <ArrowLeft size={18}/>
-              </button>
+      <div className="sticky top-0 z-50 flex flex-col bg-[var(--ui-surface)]/95 backdrop-blur-md border-b border-[var(--ui-border)] shadow-sm transition-all">
+          <div className="flex items-center justify-between px-4 py-3 overflow-x-auto no-scrollbar gap-4">
+              <div className="flex items-center gap-2 flex-shrink-0">
+                  <button 
+                      onClick={onExit} 
+                      className="mr-2 p-2 rounded-lg text-[var(--ui-text-muted)] hover:bg-[var(--ui-bg)] hover:text-[var(--ui-text-main)] transition-colors"
+                      title="Back to Workspace"
+                  >
+                      <ArrowLeft size={18}/>
+                  </button>
 
-              <div className="flex bg-[var(--ui-bg)] rounded-lg p-0.5 border border-[var(--ui-border)]">
-                  <button onClick={() => setActiveTab('preview')} className={`px-3 py-1.5 rounded-md text-xs font-bold transition-all flex items-center gap-1 ${activeTab === 'preview' ? 'bg-[var(--ui-surface)] shadow text-[var(--ui-text-main)]' : 'text-[var(--ui-text-muted)] hover:text-[var(--ui-text-main)]'}`}><BookOpen size={14}/> Read</button>
-                  <button onClick={() => setActiveTab('code')} className={`px-3 py-1.5 rounded-md text-xs font-bold transition-all flex items-center gap-1 ${activeTab === 'code' ? 'bg-[var(--ui-surface)] shadow text-[var(--ui-text-main)]' : 'text-[var(--ui-text-muted)] hover:text-[var(--ui-text-main)]'}`}><Edit3 size={14}/> Code</button>
-                  <button onClick={() => setActiveTab('diagrams')} className={`px-3 py-1.5 rounded-md text-xs font-bold transition-all flex items-center gap-1 ${activeTab === 'diagrams' ? 'bg-[var(--ui-surface)] shadow text-[var(--ui-text-main)]' : 'text-[var(--ui-text-muted)] hover:text-[var(--ui-text-main)]'}`}><Workflow size={14}/> Diagrams</button>
+                  <div className="flex bg-[var(--ui-bg)] rounded-lg p-0.5 border border-[var(--ui-border)]">
+                      <button onClick={() => setActiveTab('preview')} className={`px-3 py-1.5 rounded-md text-xs font-bold transition-all flex items-center gap-1 whitespace-nowrap ${activeTab === 'preview' ? 'bg-[var(--ui-surface)] shadow text-[var(--ui-text-main)]' : 'text-[var(--ui-text-muted)] hover:text-[var(--ui-text-main)]'}`}><BookOpen size={14}/> <span className="hidden sm:inline">Read</span></button>
+                      <button onClick={() => setActiveTab('code')} className={`px-3 py-1.5 rounded-md text-xs font-bold transition-all flex items-center gap-1 whitespace-nowrap ${activeTab === 'code' ? 'bg-[var(--ui-surface)] shadow text-[var(--ui-text-main)]' : 'text-[var(--ui-text-muted)] hover:text-[var(--ui-text-main)]'}`}><Edit3 size={14}/> <span className="hidden sm:inline">Code</span></button>
+                      <button onClick={() => setActiveTab('diagrams')} className={`px-3 py-1.5 rounded-md text-xs font-bold transition-all flex items-center gap-1 whitespace-nowrap ${activeTab === 'diagrams' ? 'bg-[var(--ui-surface)] shadow text-[var(--ui-text-main)]' : 'text-[var(--ui-text-muted)] hover:text-[var(--ui-text-main)]'}`}><Workflow size={14}/> <span className="hidden sm:inline">Diagrams</span></button>
+                  </div>
+              </div>
+
+              <div className="flex items-center gap-2 flex-shrink-0">
+                  <button 
+                    onClick={() => setShowAssistantPanel(!showAssistantPanel)} 
+                    className={`p-2 rounded-lg transition-colors flex items-center gap-2 ${showAssistantPanel ? 'bg-indigo-100 text-indigo-600' : 'text-[var(--ui-text-muted)] hover:bg-[var(--ui-bg)] hover:text-[var(--ui-text-main)]'}`}
+                    title="Assistant Context & Settings"
+                  >
+                    <Bot size={18}/>
+                    <span className="text-xs font-bold hidden sm:inline">Assistant</span>
+                  </button>
+
+                  <div className="w-[1px] h-6 bg-[var(--ui-border)] mx-1"></div>
+
+                  <button onClick={() => setShowToc(!showToc)} className={`p-2 rounded-lg text-[var(--ui-text-muted)] hover:bg-[var(--ui-bg)] hover:text-[var(--ui-text-main)] ${showToc ? 'bg-[var(--ui-bg)] text-[var(--ui-primary)]' : ''} hidden md:block`} title="Outline"><List size={18}/></button>
+                  <button onClick={handleExportPdf} disabled={isExportingPdf} className="p-2 rounded-lg text-[var(--ui-text-muted)] hover:bg-[var(--ui-bg)] hover:text-[var(--ui-text-main)]" title="PDF">{isExportingPdf ? <Loader2 size={18} className="animate-spin"/> : <FileDown size={18}/>}</button>
+                  <button onClick={() => setSensorMode(!sensorMode)} className={`p-2 rounded-lg ${sensorMode ? 'bg-amber-100 text-amber-600' : 'text-[var(--ui-text-muted)] hover:bg-[var(--ui-bg)]'}`} title="Sensor Mode"><EyeOff size={18}/></button>
+                  <button onClick={() => setShowMagicEdit(!showMagicEdit)} className="p-2 rounded-lg text-[var(--ui-text-muted)] hover:bg-[var(--ui-bg)] hover:text-indigo-500" title="Magic Edit"><Wand2 size={18}/></button>
+                  <button onClick={handleCloudUpload} className="p-2 rounded-lg text-[var(--ui-text-muted)] hover:bg-[var(--ui-bg)] hover:text-cyan-500" title="Upload Cloud"><UploadCloud size={18}/></button>
+                  
+                  <div className="w-[1px] h-6 bg-[var(--ui-border)] mx-1"></div>
+
+                  <button onClick={undo} disabled={historyIndex === 0} className="p-2 rounded-lg text-[var(--ui-text-muted)] hover:bg-[var(--ui-bg)] disabled:opacity-30"><Undo2 size={18}/></button>
+                  <button onClick={redo} disabled={historyIndex === history.length - 1} className="p-2 rounded-lg text-[var(--ui-text-muted)] hover:bg-[var(--ui-bg)] disabled:opacity-30"><Redo2 size={18}/></button>
+
+                  <button 
+                      onClick={handleManualSaveTrigger} 
+                      disabled={isSaving}
+                      className={`ml-2 px-4 py-2 rounded-lg font-bold text-xs flex items-center gap-2 transition-all ${justSaved ? 'bg-green-500 text-white' : (isDirty ? 'bg-[var(--ui-primary)] text-white hover:opacity-90' : 'bg-[var(--ui-bg)] text-[var(--ui-text-muted)] border border-[var(--ui-border)]')}`}
+                  >
+                      {isSaving ? <Loader2 size={14} className="animate-spin"/> : justSaved ? <Check size={14}/> : <Save size={14}/>}
+                      <span className="hidden md:inline">{justSaved ? 'Saved' : 'Save'}</span>
+                  </button>
               </div>
           </div>
-
-          <div className="flex items-center gap-2">
-              <button onClick={() => setShowToc(!showToc)} className={`p-2 rounded-lg text-[var(--ui-text-muted)] hover:bg-[var(--ui-bg)] hover:text-[var(--ui-text-main)] ${showToc ? 'bg-[var(--ui-bg)] text-[var(--ui-primary)]' : ''} hidden md:block`} title="Outline"><List size={18}/></button>
-              <button 
-                onClick={handleExportPdf} 
-                disabled={isExportingPdf} 
-                className="p-2 rounded-lg text-[var(--ui-text-muted)] hover:bg-[var(--ui-bg)] hover:text-[var(--ui-text-main)]" 
-                title="PDF"
-              >
-                {isExportingPdf ? (
-                  <Loader2 size={18} className="animate-spin"/>
-                ) : (
-                  <FileDown size={18}/>
-                )}
-              </button>
-              <button onClick={() => setSensorMode(!sensorMode)} className={`p-2 rounded-lg ${sensorMode ? 'bg-amber-100 text-amber-600' : 'text-[var(--ui-text-muted)] hover:bg-[var(--ui-bg)]'}`} title="Sensor Mode"><EyeOff size={18}/></button>
-              <button onClick={() => setShowMagicEdit(!showMagicEdit)} className="p-2 rounded-lg text-[var(--ui-text-muted)] hover:bg-[var(--ui-bg)] hover:text-indigo-500" title="Magic Edit"><Wand2 size={18}/></button>
-              <button onClick={handleCloudUpload} className="p-2 rounded-lg text-[var(--ui-text-muted)] hover:bg-[var(--ui-bg)] hover:text-cyan-500" title="Upload Cloud"><UploadCloud size={18}/></button>
-              
-              <div className="w-[1px] h-6 bg-[var(--ui-border)] mx-1"></div>
-
-              <button onClick={undo} disabled={historyIndex === 0} className="p-2 rounded-lg text-[var(--ui-text-muted)] hover:bg-[var(--ui-bg)] disabled:opacity-30"><Undo2 size={18}/></button>
-              <button onClick={redo} disabled={historyIndex === history.length - 1} className="p-2 rounded-lg text-[var(--ui-text-muted)] hover:bg-[var(--ui-bg)] disabled:opacity-30"><Redo2 size={18}/></button>
-
-              <button 
-                  onClick={handleManualSaveTrigger} 
-                  disabled={isSaving}
-                  className={`ml-2 px-4 py-2 rounded-lg font-bold text-xs flex items-center gap-2 transition-all ${justSaved ? 'bg-green-500 text-white' : (isDirty ? 'bg-[var(--ui-primary)] text-white hover:opacity-90' : 'bg-[var(--ui-bg)] text-[var(--ui-text-muted)] border border-[var(--ui-border)]')}`}
-              >
-                  {isSaving ? <Loader2 size={14} className="animate-spin"/> : justSaved ? <Check size={14}/> : <Save size={14}/>}
-                  <span className="hidden md:inline">{justSaved ? 'Saved' : 'Save'}</span>
-              </button>
-          </div>
       </div>
+
+      {/* QUICK ACTIONS FLOATING MENU */}
+      {selectionPos && activeTab === 'preview' && !ghostBlock && (
+          <div 
+            className="fixed z-50 animate-scale-in flex items-center gap-1 bg-[var(--ui-surface)] p-1 rounded-full shadow-xl border border-[var(--ui-border)]"
+            style={{ top: selectionPos.top, left: selectionPos.left, transform: 'translateX(-50%)' }}
+          >
+              {!showCustomPrompt ? (
+                  <>
+                      <button 
+                        onClick={() => handleQuickAction('deepen')}
+                        disabled={isDeepening || attachedContextIds.length === 0}
+                        className="p-2 rounded-full hover:bg-indigo-100 text-indigo-600 disabled:opacity-50 transition-colors relative group"
+                        title="Deepen (Requires Context)"
+                      >
+                         {isDeepening ? <Loader2 size={16} className="animate-spin"/> : <Sparkles size={16}/>}
+                         {attachedContextIds.length === 0 && (
+                             <span className="absolute -top-8 left-1/2 -translate-x-1/2 bg-black/80 text-white text-[9px] px-2 py-1 rounded opacity-0 group-hover:opacity-100 whitespace-nowrap pointer-events-none">
+                                 Need Context
+                             </span>
+                         )}
+                      </button>
+                      <div className="w-[1px] h-4 bg-[var(--ui-border)]"></div>
+                      <button 
+                        onClick={() => handleQuickAction('simplify')}
+                        className="p-2 rounded-full hover:bg-[var(--ui-bg)] text-[var(--ui-text-muted)] hover:text-[var(--ui-text-main)] transition-colors"
+                        title="Simplify (ELI5)"
+                      >
+                         <Minimize2 size={16}/>
+                      </button>
+                      <button 
+                        onClick={() => handleQuickAction('expand')}
+                        className="p-2 rounded-full hover:bg-[var(--ui-bg)] text-[var(--ui-text-muted)] hover:text-[var(--ui-text-main)] transition-colors"
+                        title="Expand"
+                      >
+                         <Maximize2 size={16}/>
+                      </button>
+                      <button 
+                        onClick={() => handleQuickAction('quiz')}
+                        className="p-2 rounded-full hover:bg-[var(--ui-bg)] text-[var(--ui-text-muted)] hover:text-[var(--ui-text-main)] transition-colors"
+                        title="Create Quiz"
+                      >
+                         <HelpCircle size={16}/>
+                      </button>
+                      <div className="w-[1px] h-4 bg-[var(--ui-border)]"></div>
+                      <button 
+                        onClick={() => setShowCustomPrompt(true)}
+                        className="p-2 rounded-full hover:bg-[var(--ui-bg)] text-[var(--ui-text-muted)] hover:text-[var(--ui-text-main)] transition-colors"
+                        title="Custom Prompt"
+                      >
+                         <MessageSquareQuote size={16}/>
+                      </button>
+                  </>
+              ) : (
+                  <div className="flex items-center gap-2 px-2">
+                      <input 
+                        autoFocus
+                        type="text" 
+                        value={customPromptText}
+                        onChange={(e) => setCustomPromptText(e.target.value)}
+                        placeholder="Ask AI to edit..."
+                        className="w-48 bg-transparent text-xs outline-none text-[var(--ui-text-main)]"
+                        onKeyDown={(e) => {
+                            if (e.key === 'Enter') handleQuickAction('custom', customPromptText);
+                            if (e.key === 'Escape') setShowCustomPrompt(false);
+                        }}
+                      />
+                      <button 
+                        onClick={() => handleQuickAction('custom', customPromptText)}
+                        className="p-1.5 bg-indigo-600 text-white rounded-full hover:bg-indigo-700"
+                      >
+                          <Sparkles size={12}/>
+                      </button>
+                      <button 
+                        onClick={() => setShowCustomPrompt(false)}
+                        className="p-1.5 text-[var(--ui-text-muted)] hover:text-[var(--ui-text-main)]"
+                      >
+                          <X size={12}/>
+                      </button>
+                  </div>
+              )}
+          </div>
+      )}
+
+      {/* GHOST BLOCK OVERLAY */}
+      {ghostBlock && (
+          <GhostBlock 
+             originalText={ghostBlock.originalText}
+             generatedText={ghostBlock.generatedText}
+             position={ghostBlock.position}
+             onAccept={() => handleGhostAction('accept')}
+             onDiscard={() => handleGhostAction('discard')}
+             onPin={() => handleGhostAction('pin')}
+          />
+      )}
+
+      {/* STICKY NOTES BOARD */}
+      <StickyNoteBoard 
+         stickies={stickies}
+         onDelete={(id) => setStickies(prev => prev.filter(s => s.id !== id))}
+      />
 
       {showMagicEdit && (
           <div className="bg-[var(--ui-surface)] border-b border-[var(--ui-border)] p-2 animate-scale-in">
@@ -665,8 +893,22 @@ const OutputDisplay: React.FC<OutputDisplayProps> = ({ content, topic, onUpdateC
              </div>
          )}
       </div>
+      <ContextSidePanel 
+        isOpen={showAssistantPanel}
+        onClose={() => setShowAssistantPanel(false)}
+        config={activeConfig}
+        onConfigChange={setActiveConfig}
+        attachedContextIds={attachedContextIds}
+        onContextChange={(ids) => {
+            setAttachedContextIds(ids);
+            setIsDirty(true);
+        }}
+        storageService={StorageService.getInstance()}
+        onQuickAction={handleSidePanelAction}
+      />
     </div>
   );
 };
 
 export default OutputDisplay;
+

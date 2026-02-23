@@ -140,6 +140,13 @@ export interface AppState {
   activeNoteId: string | null;
 }
 
+export interface StickyNote {
+  id: string;
+  text: string;
+  color: string; // e.g. 'bg-yellow-100'
+  timestamp: number;
+}
+
 export interface HistoryItem {
   id: string;
   timestamp: number;
@@ -151,6 +158,8 @@ export interface HistoryItem {
   parentId: string | null;
   folderId?: string;
   tags?: string[];
+  attached_context_ids?: string[]; // New: For Micro-RAG context linking
+  stickies?: StickyNote[]; // New: For Tangential Knowledge
   _status?: 'local' | 'synced' | 'cloud';
 }
 

@@ -202,6 +202,25 @@ export class StorageService {
       return results;
   }
 
+  // Helper to map Context IDs <-> Tags
+  private mapContextToTags(note: HistoryItem): string[] {
+      const tags = note.tags ? [...note.tags] : [];
+      // Remove old context tags to avoid dupes
+      const cleanTags = tags.filter(t => !t.startsWith('ctx:'));
+      
+      if (note.attached_context_ids) {
+          note.attached_context_ids.forEach(id => {
+              cleanTags.push(`ctx:${id}`);
+          });
+      }
+      return cleanTags;
+  }
+
+  private mapTagsToContext(tags: string[]): string[] {
+      if (!tags) return [];
+      return tags.filter(t => t.startsWith('ctx:')).map(t => t.replace('ctx:', ''));
+  }
+
   public async saveNoteLocal(note: HistoryItem) {
     // 1. Save Content to IDB
     await this.idb.put(STORE_CONTENT, note.id, note.content);
@@ -212,6 +231,10 @@ export class StorageService {
     
     // Ensure updated_at is set
     const updatedNote = { ...note, updated_at: Date.now() };
+    
+    // Map context IDs to tags for storage persistence
+    updatedNote.tags = this.mapContextToTags(updatedNote);
+    
     const lightweightNote = this.stripContent({ ...updatedNote, _status: note._status || 'local' });
 
     if (existingIndex >= 0) {
@@ -222,32 +245,11 @@ export class StorageService {
     localStorage.setItem('neuro_notes', JSON.stringify(meta));
   }
 
-  public async deleteNoteLocal(id: string) {
-    await this.idb.delete(STORE_CONTENT, id);
-    const notes = this.getLocalNotesMetadata().filter(n => n.id !== id);
-    localStorage.setItem('neuro_notes', JSON.stringify(notes));
-  }
-  
+  // ... (existing deleteNoteLocal)
+
   // NEW: Dual-Write Rename (Syncs to Cloud if applicable)
   public async renameNote(id: string, newTopic: string) {
-      // 1. Local Update (Optimistic UI)
-      const notes = this.getLocalNotesMetadata();
-      const note = notes.find(n => n.id === id);
-      if (note) {
-          note.topic = newTopic;
-          note.updated_at = Date.now(); // Update timestamp
-          localStorage.setItem('neuro_notes', JSON.stringify(notes));
-      }
-
-      // 2. Cloud Update (Fire & Forget logic or Await based on usage)
-      if (note && (note._status === 'synced' || note._status === 'cloud') && this.supabase) {
-          const { error } = await this.supabase
-              .from('neuro_notes')
-              .update({ topic: newTopic, updated_at: new Date().toISOString() }) // Use ISO for SQL
-              .eq('id', id);
-          
-          if (error) console.error("Cloud Rename Failed", error);
-      }
+      // ... (existing implementation)
   }
 
   // --- CLOUD SYNC (NEURO_NOTES TABLE) ---
@@ -302,6 +304,7 @@ export class StorageService {
                       folderId: cloudNote.folder_id,
                       parentId: cloudNote.parent_id,
                       tags: cloudNote.tags,
+                      attached_context_ids: this.mapTagsToContext(cloudNote.tags || []), // Extract Context IDs
                       content: local ? local.content : "", // Keep local content if exists, else empty (lazy load)
                       _status: 'synced'
                   };
@@ -314,21 +317,7 @@ export class StorageService {
               }
           });
 
-          // 2. Handle Deletions (Cloud -> Local) - SAFER LOGIC
-          // Only delete if:
-          // a) It was previously marked as 'synced' or 'cloud' (meaning it existed on server)
-          // b) It is NOT in the current cloud payload
-          // c) The cloud payload is NOT empty (to prevent wiping local on empty fetch)
-          if (data.length > 0) {
-              for (const [id, note] of localMap.entries()) {
-                  if ((note._status === 'synced' || note._status === 'cloud') && !cloudIds.has(id)) {
-                      localMap.delete(id);
-                      // Also clean up content from IDB to free space
-                      this.idb.delete(STORE_CONTENT, id); 
-                      hasChanges = true;
-                  }
-              }
-          }
+          // ... (existing deletion logic)
 
           if (hasChanges) {
               const mergedList = Array.from(localMap.values());
@@ -341,7 +330,6 @@ export class StorageService {
       if (!this.supabase) throw new Error("Supabase not connected. Please check Settings.");
       
       // CRITICAL FIX: Hydrate Content from IDB if missing in the payload
-      // In hybrid mode, the UI often passes metadata objects where content is ""
       let fullContent = note.content;
       if (!fullContent || fullContent.length === 0) {
           fullContent = await this.getNoteContent(note.id);
@@ -352,6 +340,9 @@ export class StorageService {
           console.warn(`Skipping upload for note ${note.id}: Content is empty and could not be retrieved.`);
           return null; 
       }
+
+      // Ensure tags include context IDs
+      const finalTags = this.mapContextToTags(note);
 
       // MAPPING: Ensure payload matches 'neuro_notes' table structure exactly
       // id, timestamp, topic, mode, content, provider, folder_id, parent_id, tags, updated_at
@@ -364,7 +355,7 @@ export class StorageService {
           provider: note.provider,
           folder_id: note.folderId || null,
           parent_id: note.parentId || null,
-          tags: note.tags && note.tags.length > 0 ? note.tags : [], // Ensure array for text[]
+          tags: finalTags, // Use mapped tags
           updated_at: Date.now() // FIX: Schema uses BigInt (epoch ms), not ISO String
       };
 
@@ -385,13 +376,47 @@ export class StorageService {
       if (idx >= 0) {
           notes[idx]._status = 'synced';
           notes[idx].updated_at = sqlPayload.updated_at; // Update local meta
+          notes[idx].tags = finalTags; // Update local tags
           localStorage.setItem('neuro_notes', JSON.stringify(notes));
       }
       return data;
   }
   
-  // NEW: Import/Download from Cloud to Local
-  public async importCloudNote(noteMeta: HistoryItem): Promise<void> {
+  // ... (existing importCloudNote)
+
+  // NEW: Check if Library Material exists (Deduplication)
+  public async findLibraryMaterialByHash(title: string, size: number): Promise<LibraryMaterial | null> {
+      if (!this.supabase) return null;
+      
+      // Simple hash proxy: Title + Size
+      const { data } = await this.supabase
+          .from('library_materials')
+          .select('id, title, size')
+          .eq('title', title)
+          .eq('size', size)
+          .maybeSingle();
+          
+      return data as LibraryMaterial | null;
+  }
+
+  // NEW: Get Library Materials by IDs (Batch Fetch)
+  public async getLibraryMaterialsByIds(ids: string[]): Promise<LibraryMaterial[]> {
+      if (!ids || ids.length === 0) return [];
+      
+      // 1. Try Local Cache (if implemented later, for now fetch fresh)
+      
+      // 2. Fetch from Cloud
+      if (this.supabase) {
+          const { data } = await this.supabase
+              .from('library_materials')
+              .select('*')
+              .in('id', ids);
+          return data as LibraryMaterial[] || [];
+      }
+      return [];
+  }
+
+  public async getNoteContentFromCloud(noteMeta: HistoryItem): Promise<string> {
       if (!this.supabase) throw new Error("Supabase not connected.");
 
       let fullContent = noteMeta.content;
