@@ -4,11 +4,11 @@ import ReactMarkdown from 'react-markdown';
 import remarkGfm from 'remark-gfm';
 import remarkMath from 'remark-math';
 import rehypeKatex from 'rehype-katex';
-import { Download, Copy, Eye, Check, List, Book, Focus, Save, Edit3, CloudUpload, Clipboard, ClipboardCheck, EyeOff, MousePointerClick, BookOpen, Microscope, Activity, AlertTriangle, Info, Wand2, Search, X, HelpCircle, MessageSquareQuote, LayoutTemplate, Undo2, Redo2, Loader2, Workflow, Printer, FileDown, Maximize2, Minimize2, UploadCloud, ArrowLeft, StickyNote } from 'lucide-react';
+import { Download, Copy, Eye, Check, List, Book, Focus, Save, Edit3, CloudUpload, Clipboard, ClipboardCheck, EyeOff, MousePointerClick, BookOpen, Microscope, Activity, AlertTriangle, Info, Wand2, Search, X, HelpCircle, MessageSquareQuote, LayoutTemplate, Undo2, Redo2, Loader2, Workflow, Printer, FileDown, Maximize2, Minimize2, UploadCloud, ArrowLeft, StickyNote, Bot } from 'lucide-react';
 import { StorageService } from '../services/storageService';
 import { processGeneratedNote } from '../utils/formatter';
-import { refineNoteContent, generateAssistantResponse } from '../services/geminiService';
-import { refineNoteContentGroq, generateAssistantResponseGroq } from '../services/groqService';
+import { refineNoteContent, generateAssistantResponse, deepenNoteContent } from '../services/geminiService';
+import { refineNoteContentGroq, generateAssistantResponseGroq, deepenNoteContentGroq } from '../services/groqService';
 import Mermaid from './Mermaid';
 import AssistantPanel from './AssistantPanel';
 import { AppTheme, AIProvider, GenerationConfig, UploadedFile, GEMINI_MODELS_LIST, AppModel, ChatMessage, StickyNote as StickyNoteType } from '../types';
@@ -102,6 +102,7 @@ const OutputDisplay: React.FC<OutputDisplayProps> = ({ content, topic, onUpdateC
 
   const [showMagicEdit, setShowMagicEdit] = useState(false);
   const [magicInstruction, setMagicInstruction] = useState('');
+  const [magicFiles, setMagicFiles] = useState<File[]>([]);
   const [magicProvider, setMagicProvider] = useState<AIProvider>(config.provider);
   const [magicModel, setMagicModel] = useState<string>(config.model);
   const [isMagicLoading, setIsMagicLoading] = useState(false);
@@ -116,6 +117,8 @@ const OutputDisplay: React.FC<OutputDisplayProps> = ({ content, topic, onUpdateC
   const [currentNoteMetadata, setCurrentNoteMetadata] = useState<any>(null);
   const [stickies, setStickies] = useState<StickyNoteType[]>([]);
   const [rightPanelTab, setRightPanelTab] = useState<'assistant' | 'stickies'>('assistant');
+  const [isRightPanelOpen, setIsRightPanelOpen] = useState(true);
+  const stickiesContainerRef = useRef<HTMLDivElement>(null);
 
   useEffect(() => {
       isMounted.current = true;
@@ -176,6 +179,15 @@ const OutputDisplay: React.FC<OutputDisplayProps> = ({ content, topic, onUpdateC
       setStickies(newStickies);
       saveStickiesToMetadata(newStickies);
       setRightPanelTab('stickies');
+      setIsRightPanelOpen(true);
+      setTimeout(() => {
+          if (stickiesContainerRef.current) {
+              stickiesContainerRef.current.scrollTo({
+                  top: stickiesContainerRef.current.scrollHeight,
+                  behavior: 'smooth'
+              });
+          }
+      }, 100);
   };
 
   const deleteSticky = (id: string) => {
@@ -418,14 +430,34 @@ const OutputDisplay: React.FC<OutputDisplayProps> = ({ content, topic, onUpdateC
   };
 
   const executeMagicEdit = async () => {
-      if (!magicInstruction) return;
+      if (!magicInstruction && magicFiles.length === 0) return;
       setIsMagicLoading(true);
       try {
+          const uploadedFiles: UploadedFile[] = await Promise.all(magicFiles.map(async f => ({
+              name: f.name,
+              mimeType: f.type,
+              data: await fileToBase64(f)
+          })));
+
           let newContent = '';
           const tempConfig = { ...config, provider: magicProvider, model: magicModel };
-          if (magicProvider === AIProvider.GEMINI) { newContent = await refineNoteContent(tempConfig, editableContent, magicInstruction); } 
-          else { newContent = await refineNoteContentGroq(tempConfig, editableContent, magicInstruction); }
-          if(isMounted.current) { pushToHistory(newContent); setShowMagicEdit(false); setMagicInstruction(''); }
+          
+          // Use deepenNoteContent if files are provided, otherwise use refineNoteContent
+          if (magicProvider === AIProvider.GEMINI) { 
+              if (uploadedFiles.length > 0) {
+                  newContent = await deepenNoteContent(tempConfig, editableContent, magicInstruction, uploadedFiles);
+              } else {
+                  newContent = await refineNoteContent(tempConfig, editableContent, magicInstruction); 
+              }
+          } 
+          else { 
+              if (uploadedFiles.length > 0) {
+                  newContent = await deepenNoteContentGroq(tempConfig, editableContent, magicInstruction, uploadedFiles);
+              } else {
+                  newContent = await refineNoteContentGroq(tempConfig, editableContent, magicInstruction); 
+              }
+          }
+          if(isMounted.current) { pushToHistory(newContent); setShowMagicEdit(false); setMagicInstruction(''); setMagicFiles([]); }
       } catch (e: any) { alert("Magic Edit Failed: " + e.message); } 
       finally { if(isMounted.current) setIsMagicLoading(false); }
   };
@@ -442,7 +474,7 @@ const OutputDisplay: React.FC<OutputDisplayProps> = ({ content, topic, onUpdateC
   }, [editableContent]);
 
   // --- ASSISTANT HANDLERS ---
-  const handleAssistantPrompt = async (history: ChatMessage[], files: File[], provider?: AIProvider, model?: string): Promise<string> => {
+  const handleAssistantPrompt = async (history: ChatMessage[], files: File[], provider?: AIProvider, model?: string, contextIds?: string[]): Promise<string> => {
       setIsAiProcessing(true);
       try {
           const uploadedFiles: UploadedFile[] = await Promise.all(files.map(async f => ({
@@ -450,6 +482,13 @@ const OutputDisplay: React.FC<OutputDisplayProps> = ({ content, topic, onUpdateC
               mimeType: f.type,
               data: await fileToBase64(f)
           })));
+          
+          // Fetch Context Content if IDs provided
+          let additionalContexts: Record<string, string> = {};
+          if (contextIds && contextIds.length > 0) {
+              const storage = StorageService.getInstance();
+              additionalContexts = await storage.getBatchContent(contextIds);
+          }
 
           let response = '';
           // Use override if provided, else fallback to config
@@ -458,9 +497,9 @@ const OutputDisplay: React.FC<OutputDisplayProps> = ({ content, topic, onUpdateC
           const tempConfig = { ...config, provider: activeProvider, model: activeModel };
 
           if (activeProvider === AIProvider.GEMINI) {
-              response = await generateAssistantResponse(tempConfig, editableContent, history, uploadedFiles);
+              response = await generateAssistantResponse(tempConfig, editableContent, history, uploadedFiles, additionalContexts);
           } else {
-              response = await generateAssistantResponseGroq(tempConfig, editableContent, history, uploadedFiles);
+              response = await generateAssistantResponseGroq(tempConfig, editableContent, history, uploadedFiles, additionalContexts);
           }
 
           // CHECK FOR STICKY COMMANDS
@@ -485,6 +524,42 @@ const OutputDisplay: React.FC<OutputDisplayProps> = ({ content, topic, onUpdateC
           return response;
       } catch (e: any) {
           alert("Assistant Error: " + e.message);
+          throw e;
+      } finally {
+          if (isMounted.current) setIsAiProcessing(false);
+      }
+  };
+
+  const handleDeepenNote = async (instruction: string, files: File[], provider?: AIProvider, model?: string, contextIds?: string[]) => {
+      setIsAiProcessing(true);
+      try {
+          const uploadedFiles: UploadedFile[] = await Promise.all(files.map(async f => ({
+              name: f.name,
+              mimeType: f.type,
+              data: await fileToBase64(f)
+          })));
+          
+          let additionalContexts: Record<string, string> = {};
+          if (contextIds && contextIds.length > 0) {
+              const storage = StorageService.getInstance();
+              additionalContexts = await storage.getBatchContent(contextIds);
+          }
+
+          let newContent = '';
+          const activeProvider = provider || config.provider;
+          const activeModel = model || config.model;
+          const tempConfig = { ...config, provider: activeProvider, model: activeModel };
+
+          if (activeProvider === AIProvider.GEMINI) {
+              newContent = await deepenNoteContent(tempConfig, editableContent, instruction, uploadedFiles, additionalContexts);
+          } else {
+              newContent = await deepenNoteContentGroq(tempConfig, editableContent, instruction, uploadedFiles, additionalContexts);
+          }
+
+          pushToHistory(newContent);
+          return "I have deepened and enriched your note based on the provided context!";
+      } catch (e: any) {
+          alert("Deepen Error: " + e.message);
           throw e;
       } finally {
           if (isMounted.current) setIsAiProcessing(false);
@@ -630,6 +705,16 @@ const OutputDisplay: React.FC<OutputDisplayProps> = ({ content, topic, onUpdateC
               <button onClick={undo} disabled={historyIndex === 0} className="p-2 rounded-lg text-[var(--ui-text-muted)] hover:bg-[var(--ui-bg)] disabled:opacity-30"><Undo2 size={18}/></button>
               <button onClick={redo} disabled={historyIndex === history.length - 1} className="p-2 rounded-lg text-[var(--ui-text-muted)] hover:bg-[var(--ui-bg)] disabled:opacity-30"><Redo2 size={18}/></button>
 
+              <div className="w-[1px] h-6 bg-[var(--ui-border)] mx-1"></div>
+
+              <button 
+                  onClick={() => setIsRightPanelOpen(!isRightPanelOpen)} 
+                  className={`p-2 rounded-lg transition-colors ${isRightPanelOpen ? 'bg-[var(--ui-primary)]/10 text-[var(--ui-primary)]' : 'text-[var(--ui-text-muted)] hover:bg-[var(--ui-bg)] hover:text-[var(--ui-text-main)]'}`}
+                  title="Toggle Assistant Panel"
+              >
+                  <Bot size={18}/>
+              </button>
+
               <button 
                   onClick={handleManualSaveTrigger} 
                   disabled={isSaving}
@@ -673,6 +758,24 @@ const OutputDisplay: React.FC<OutputDisplayProps> = ({ content, topic, onUpdateC
                       className="flex-1 bg-transparent text-sm outline-none text-[var(--ui-text-main)]"
                       onKeyDown={(e) => e.key === 'Enter' && executeMagicEdit()}
                   />
+                  <label className="cursor-pointer text-[var(--ui-text-muted)] hover:text-[var(--ui-primary)] transition-colors relative">
+                      <input 
+                          type="file" 
+                          multiple 
+                          className="hidden" 
+                          onChange={(e) => {
+                              if (e.target.files) {
+                                  setMagicFiles(Array.from(e.target.files));
+                              }
+                          }}
+                      />
+                      <UploadCloud size={16} />
+                      {magicFiles.length > 0 && (
+                          <span className="absolute -top-2 -right-2 bg-[var(--ui-primary)] text-white text-[8px] font-bold w-4 h-4 rounded-full flex items-center justify-center">
+                              {magicFiles.length}
+                          </span>
+                      )}
+                  </label>
                   {isMagicLoading ? <Loader2 size={16} className="animate-spin text-[var(--ui-text-muted)]"/> : (
                       <button onClick={() => setShowMagicEdit(false)} className="hover:text-[var(--ui-text-main)] text-[var(--ui-text-muted)]"><X size={16}/></button>
                   )}
@@ -737,100 +840,103 @@ const OutputDisplay: React.FC<OutputDisplayProps> = ({ content, topic, onUpdateC
           </div>
 
           {/* RIGHT PANE: ASSISTANT & STICKIES (30%) */}
-          <div className="w-[30%] min-w-[320px] hidden lg:flex flex-col h-full border-l border-[var(--ui-border)] bg-[var(--ui-surface)]">
-              
-              {/* TABS */}
-              <div className="flex border-b border-[var(--ui-border)]">
-                  <button 
-                      onClick={() => setRightPanelTab('assistant')}
-                      className={`flex-1 py-3 text-xs font-bold uppercase tracking-wider transition-colors ${rightPanelTab === 'assistant' ? 'text-[var(--ui-primary)] border-b-2 border-[var(--ui-primary)] bg-[var(--ui-bg)]' : 'text-[var(--ui-text-muted)] hover:bg-[var(--ui-bg)]'}`}
-                  >
-                      AI Assistant
-                  </button>
-                  <button 
-                      onClick={() => setRightPanelTab('stickies')}
-                      className={`flex-1 py-3 text-xs font-bold uppercase tracking-wider transition-colors ${rightPanelTab === 'stickies' ? 'text-[var(--ui-primary)] border-b-2 border-[var(--ui-primary)] bg-[var(--ui-bg)]' : 'text-[var(--ui-text-muted)] hover:bg-[var(--ui-bg)]'}`}
-                  >
-                      Stickies ({stickies.length})
-                  </button>
-              </div>
+          {isRightPanelOpen && (
+              <div className="w-[30%] min-w-[320px] hidden lg:flex flex-col h-full border-l border-[var(--ui-border)] bg-[var(--ui-surface)] animate-slide-left">
+                  
+                  {/* TABS */}
+                  <div className="flex border-b border-[var(--ui-border)]">
+                      <button 
+                          onClick={() => setRightPanelTab('assistant')}
+                          className={`flex-1 py-3 text-xs font-bold uppercase tracking-wider transition-colors ${rightPanelTab === 'assistant' ? 'text-[var(--ui-primary)] border-b-2 border-[var(--ui-primary)] bg-[var(--ui-bg)]' : 'text-[var(--ui-text-muted)] hover:bg-[var(--ui-bg)]'}`}
+                      >
+                          AI Assistant
+                      </button>
+                      <button 
+                          onClick={() => setRightPanelTab('stickies')}
+                          className={`flex-1 py-3 text-xs font-bold uppercase tracking-wider transition-colors ${rightPanelTab === 'stickies' ? 'text-[var(--ui-primary)] border-b-2 border-[var(--ui-primary)] bg-[var(--ui-bg)]' : 'text-[var(--ui-text-muted)] hover:bg-[var(--ui-bg)]'}`}
+                      >
+                          Stickies ({stickies.length})
+                      </button>
+                  </div>
 
-              {/* CONTENT */}
-              <div className="flex-1 overflow-hidden relative">
-                  {rightPanelTab === 'assistant' ? (
-                      <AssistantPanel 
-                          noteMetadata={{ ...currentNoteMetadata, stickies }} // Pass live stickies
-                          onPromptSubmit={handleAssistantPrompt}
-                          isProcessing={isAiProcessing}
-                          groqModels={groqModels}
-                      />
-                  ) : (
-                      <div className="h-full flex flex-col bg-[var(--ui-bg)] p-4 overflow-y-auto custom-scrollbar space-y-4">
-                          <div className="flex justify-between items-center mb-2">
-                              <h3 className="text-xs font-bold text-[var(--ui-text-muted)] uppercase">Your Notes</h3>
-                              <button 
-                                  onClick={() => addSticky("New Note", 'yellow')}
-                                  className="text-[var(--ui-primary)] hover:bg-[var(--ui-primary)]/10 p-1 rounded transition-colors"
-                                  title="Add Sticky"
-                              >
-                                  <CloudUpload size={16} className="rotate-90"/> {/* Using CloudUpload as a 'plus' ish icon or just use text */}
-                              </button>
+                  {/* CONTENT */}
+                  <div className="flex-1 overflow-hidden relative">
+                      {rightPanelTab === 'assistant' ? (
+                          <AssistantPanel 
+                              noteMetadata={{ ...currentNoteMetadata, stickies }} // Pass live stickies
+                              onPromptSubmit={handleAssistantPrompt}
+                              onDeepenNote={handleDeepenNote}
+                              isProcessing={isAiProcessing}
+                              groqModels={groqModels}
+                          />
+                      ) : (
+                          <div ref={stickiesContainerRef} className="h-full flex flex-col bg-[var(--ui-bg)] p-4 overflow-y-auto custom-scrollbar space-y-4">
+                              <div className="flex justify-between items-center mb-2">
+                                  <h3 className="text-xs font-bold text-[var(--ui-text-muted)] uppercase">Your Notes</h3>
+                                  <button 
+                                      onClick={() => addSticky("New Note", 'yellow')}
+                                      className="text-[var(--ui-primary)] hover:bg-[var(--ui-primary)]/10 p-1 rounded transition-colors"
+                                      title="Add Sticky"
+                                  >
+                                      <CloudUpload size={16} className="rotate-90"/> {/* Using CloudUpload as a 'plus' ish icon or just use text */}
+                                  </button>
+                              </div>
+                              
+                              {stickies.length === 0 && (
+                                  <div className="text-center py-10 opacity-30 flex flex-col items-center">
+                                      <StickyNote size={40} className="mb-2"/>
+                                      <p className="text-xs">No stickies yet</p>
+                                      <button onClick={() => addSticky("Don't forget to...", 'yellow')} className="mt-2 text-[var(--ui-primary)] text-xs hover:underline">Create one</button>
+                                  </div>
+                              )}
+
+                              {stickies.map((sticky) => (
+                                  <div 
+                                      key={sticky.id} 
+                                      className={`relative group p-3 rounded-lg shadow-sm border transition-transform hover:scale-[1.02] ${
+                                          sticky.color === 'yellow' ? 'bg-yellow-50 border-yellow-200 text-yellow-900' :
+                                          sticky.color === 'blue' ? 'bg-blue-50 border-blue-200 text-blue-900' :
+                                          sticky.color === 'green' ? 'bg-green-50 border-green-200 text-green-900' :
+                                          'bg-pink-50 border-pink-200 text-pink-900'
+                                      }`}
+                                  >
+                                      <textarea 
+                                          value={sticky.text}
+                                          onChange={(e) => {
+                                              const newStickies = stickies.map(s => s.id === sticky.id ? { ...s, text: e.target.value } : s);
+                                              setStickies(newStickies);
+                                              // Debounce save? For now save on blur
+                                          }}
+                                          onBlur={() => saveStickiesToMetadata(stickies)}
+                                          className="w-full bg-transparent outline-none resize-none text-xs font-medium min-h-[60px]"
+                                      />
+                                      <div className="absolute top-2 right-2 opacity-0 group-hover:opacity-100 transition-opacity flex gap-1">
+                                          <button onClick={() => deleteSticky(sticky.id)} className="text-red-400 hover:text-red-600"><X size={12}/></button>
+                                      </div>
+                                      <div className="flex gap-1 mt-2 opacity-50 group-hover:opacity-100 transition-opacity">
+                                          {['yellow', 'blue', 'green', 'pink'].map(c => (
+                                              <button 
+                                                  key={c}
+                                                  onClick={() => {
+                                                      const newStickies = stickies.map(s => s.id === sticky.id ? { ...s, color: c as any } : s);
+                                                      setStickies(newStickies);
+                                                      saveStickiesToMetadata(newStickies);
+                                                  }}
+                                                  className={`w-3 h-3 rounded-full border border-black/10 ${
+                                                      c === 'yellow' ? 'bg-yellow-300' :
+                                                      c === 'blue' ? 'bg-blue-300' :
+                                                      c === 'green' ? 'bg-green-300' : 'bg-pink-300'
+                                                  }`}
+                                              />
+                                          ))}
+                                      </div>
+                                  </div>
+                              ))}
                           </div>
-                          
-                          {stickies.length === 0 && (
-                              <div className="text-center py-10 opacity-30 flex flex-col items-center">
-                                  <StickyNote size={40} className="mb-2"/>
-                                  <p className="text-xs">No stickies yet</p>
-                                  <button onClick={() => addSticky("Don't forget to...", 'yellow')} className="mt-2 text-[var(--ui-primary)] text-xs hover:underline">Create one</button>
-                              </div>
-                          )}
-
-                          {stickies.map((sticky) => (
-                              <div 
-                                  key={sticky.id} 
-                                  className={`relative group p-3 rounded-lg shadow-sm border transition-transform hover:scale-[1.02] ${
-                                      sticky.color === 'yellow' ? 'bg-yellow-50 border-yellow-200 text-yellow-900' :
-                                      sticky.color === 'blue' ? 'bg-blue-50 border-blue-200 text-blue-900' :
-                                      sticky.color === 'green' ? 'bg-green-50 border-green-200 text-green-900' :
-                                      'bg-pink-50 border-pink-200 text-pink-900'
-                                  }`}
-                              >
-                                  <textarea 
-                                      value={sticky.text}
-                                      onChange={(e) => {
-                                          const newStickies = stickies.map(s => s.id === sticky.id ? { ...s, text: e.target.value } : s);
-                                          setStickies(newStickies);
-                                          // Debounce save? For now save on blur
-                                      }}
-                                      onBlur={() => saveStickiesToMetadata(stickies)}
-                                      className="w-full bg-transparent outline-none resize-none text-xs font-medium min-h-[60px]"
-                                  />
-                                  <div className="absolute top-2 right-2 opacity-0 group-hover:opacity-100 transition-opacity flex gap-1">
-                                      <button onClick={() => deleteSticky(sticky.id)} className="text-red-400 hover:text-red-600"><X size={12}/></button>
-                                  </div>
-                                  <div className="flex gap-1 mt-2 opacity-50 group-hover:opacity-100 transition-opacity">
-                                      {['yellow', 'blue', 'green', 'pink'].map(c => (
-                                          <button 
-                                              key={c}
-                                              onClick={() => {
-                                                  const newStickies = stickies.map(s => s.id === sticky.id ? { ...s, color: c as any } : s);
-                                                  setStickies(newStickies);
-                                                  saveStickiesToMetadata(newStickies);
-                                              }}
-                                              className={`w-3 h-3 rounded-full border border-black/10 ${
-                                                  c === 'yellow' ? 'bg-yellow-300' :
-                                                  c === 'blue' ? 'bg-blue-300' :
-                                                  c === 'green' ? 'bg-green-300' : 'bg-pink-300'
-                                              }`}
-                                          />
-                                      ))}
-                                  </div>
-                              </div>
-                          ))}
-                      </div>
-                  )}
+                      )}
+                  </div>
               </div>
-          </div>
+          )}
 
       </div>
 

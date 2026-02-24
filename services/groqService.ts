@@ -292,15 +292,12 @@ export const refineNoteContentGroq = async (
   }
 };
 
-/* -------------------------------------------------------------------------- */
-/*                       ASSISTANT PANEL ENGINE (GROQ)                        */
-/* -------------------------------------------------------------------------- */
-
-export const generateAssistantResponseGroq = async (
+export const deepenNoteContentGroq = async (
   config: GenerationConfig,
   currentContent: string,
-  history: ChatMessage[],
-  files: any[] // Placeholder for consistency
+  instruction: string,
+  files: any[],
+  additionalContexts?: Record<string, string>
 ): Promise<string> => {
   const envKey = (import.meta as any).env?.VITE_GROQ_API_KEY || (typeof process !== 'undefined' ? process.env.GROQ_API_KEY : '');
   const apiKey = config.groqApiKey || envKey;
@@ -309,6 +306,77 @@ export const generateAssistantResponseGroq = async (
   const groq = getGroqClient(apiKey);
   const modelName = config.model || 'llama-3.3-70b-versatile';
 
+  let contextString = "";
+  if (additionalContexts && Object.keys(additionalContexts).length > 0) {
+      contextString = "\n\n*** ADDITIONAL REFERENCE CONTEXT ***\n";
+      Object.entries(additionalContexts).forEach(([id, content]) => {
+          contextString += `\n--- SOURCE: ${id} ---\n${content.substring(0, 5000)}\n`;
+      });
+  }
+
+  const prompt = `
+  ROLE: Expert Medical Editor & Professor.
+  TASK: DEEPEN and ENRICH the existing Medical Note using the provided context materials.
+
+  USER INSTRUCTION: "${instruction || 'Deepen the note using the provided context.'}"
+
+  RULES FOR DEEPENING:
+  1. DO NOT DELETE OR SUMMARIZE existing information. Your job is to EXPAND it.
+  2. Integrate new facts, mechanisms, clinical correlations, and details from the Context into the existing structure.
+  3. If the Context contains new relevant topics not in the original note, add them as new sections at the end or where logically appropriate.
+  4. Maintain the original Markdown formatting (Headers, Lists, etc.).
+  5. The final output must be a comprehensive, combined note. DO NOT output a conversational response, ONLY the new Markdown note.
+  6. Write extensively. Do not be brief.
+
+  ORIGINAL CONTENT:
+  """
+  ${currentContent}
+  """
+  ${contextString}
+  `;
+
+  try {
+      const completion = await groq.chat.completions.create({
+          messages: [{ role: "user", content: prompt }],
+          model: modelName,
+          temperature: 0.3,
+          max_tokens: 8192,
+          stream: false
+      });
+
+      return processGeneratedNote(completion.choices[0]?.message?.content || currentContent);
+  } catch (e: any) {
+      console.error("Groq Deepen Error", e);
+      throw new Error("Failed to deepen content: " + e.message);
+  }
+};
+
+/* -------------------------------------------------------------------------- */
+/*                       ASSISTANT PANEL ENGINE (GROQ)                        */
+/* -------------------------------------------------------------------------- */
+
+export const generateAssistantResponseGroq = async (
+  config: GenerationConfig,
+  currentContent: string,
+  history: ChatMessage[],
+  files: any[], // Placeholder for consistency
+  additionalContexts?: Record<string, string>
+): Promise<string> => {
+  const envKey = (import.meta as any).env?.VITE_GROQ_API_KEY || (typeof process !== 'undefined' ? process.env.GROQ_API_KEY : '');
+  const apiKey = config.groqApiKey || envKey;
+  if (!apiKey) throw new Error("Groq API Key Missing");
+
+  const groq = getGroqClient(apiKey);
+  const modelName = config.model || 'llama-3.3-70b-versatile';
+
+  let contextString = "";
+  if (additionalContexts && Object.keys(additionalContexts).length > 0) {
+      contextString = "\n\n*** ADDITIONAL REFERENCE CONTEXT ***\n";
+      Object.entries(additionalContexts).forEach(([id, content]) => {
+          contextString += `\n--- SOURCE: ${id} ---\n${content.substring(0, 5000)}\n`;
+      });
+  }
+
   const systemPrompt = `
   ROLE: Intelligent Medical Assistant (Neuro-Sidekick).
   CONTEXT: The user is working on a medical note.
@@ -316,12 +384,14 @@ export const generateAssistantResponseGroq = async (
   """
   ${currentContent.substring(0, 20000)} ... (truncated)
   """
+  ${contextString}
 
   INSTRUCTION:
   - Provide a direct, high-quality response to the user's request.
   - If asked to add content, write it in Markdown format matching the note's style.
   - If asked to summarize, provide a concise summary.
   - Do NOT repeat the user's prompt.
+  - Use the Additional Reference Context if relevant to answer the user's question.
 
   *** TOOL CAPABILITIES ***
   - You can create sticky notes for the user. 

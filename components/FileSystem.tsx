@@ -167,6 +167,12 @@ const FileSystem: React.FC<FileSystemProps> = ({ onSelectNote, activeNoteId }) =
   }, [notes, activeTab, searchQuery]);
 
 
+  const handleMoveNote = (noteId: string, folderId: string | null) => {
+      storage.moveNoteToFolder(noteId, folderId);
+      refreshData();
+      if (folderId) setExpandedFolders(prev => ({...prev, [folderId]: true}));
+  };
+
   // --- SUB-COMPONENT: NOTE ROW ---
   const NoteRow: React.FC<{ note: HistoryItem; depth?: number }> = React.memo(({ note, depth = 0 }) => {
       const isActive = activeNoteId === note.id;
@@ -203,8 +209,34 @@ const FileSystem: React.FC<FileSystemProps> = ({ onSelectNote, activeNoteId }) =
 
               {/* POPUP MENU */}
               {activeMenuId === note.id && (
-                  <div ref={menuRef} className="absolute right-2 z-50 w-32 bg-[var(--ui-surface)] border border-[var(--ui-border)] shadow-xl rounded-lg overflow-hidden animate-fade-in flex flex-col py-1">
+                  <div ref={menuRef} className="absolute right-2 z-50 w-40 bg-[var(--ui-surface)] border border-[var(--ui-border)] shadow-xl rounded-lg overflow-hidden animate-fade-in flex flex-col py-1">
                       <button onClick={(e) => { e.stopPropagation(); handleRenameNote(note.id, note.topic); setActiveMenuId(null); }} className="px-3 py-2 text-left text-[10px] hover:bg-[var(--ui-bg)] flex items-center gap-2 text-[var(--ui-text-main)]"><Edit2 size={10}/> Rename</button>
+                      
+                      {/* Move To Submenu */}
+                      <div className="relative group/move">
+                          <button className="w-full px-3 py-2 text-left text-[10px] hover:bg-[var(--ui-bg)] flex items-center justify-between text-[var(--ui-text-main)]">
+                              <span className="flex items-center gap-2"><CornerDownRight size={10}/> Move To...</span>
+                              <ChevronRight size={10}/>
+                          </button>
+                          <div className="absolute left-full top-0 ml-1 w-32 bg-[var(--ui-surface)] border border-[var(--ui-border)] shadow-xl rounded-lg overflow-hidden hidden group-hover/move:flex flex-col py-1 z-50">
+                              <button 
+                                  onClick={(e) => { e.stopPropagation(); handleMoveNote(note.id, null); setActiveMenuId(null); }} 
+                                  className="px-3 py-2 text-left text-[10px] hover:bg-[var(--ui-bg)] text-[var(--ui-text-main)] truncate"
+                              >
+                                  [Root]
+                              </button>
+                              {folders.map(f => (
+                                  <button 
+                                      key={f.id}
+                                      onClick={(e) => { e.stopPropagation(); handleMoveNote(note.id, f.id); setActiveMenuId(null); }} 
+                                      className="px-3 py-2 text-left text-[10px] hover:bg-[var(--ui-bg)] text-[var(--ui-text-main)] truncate"
+                                  >
+                                      {f.name}
+                                  </button>
+                              ))}
+                          </div>
+                      </div>
+
                       {note._status === 'local' && <button onClick={(e) => { e.stopPropagation(); handleCloudUpload(note); setActiveMenuId(null); }} className="px-3 py-2 text-left text-[10px] hover:bg-[var(--ui-bg)] flex items-center gap-2 text-cyan-500"><UploadCloud size={10}/> Upload Cloud</button>}
                       <div className="h-[1px] bg-[var(--ui-border)] my-1"></div>
                       <button onClick={(e) => { e.stopPropagation(); handleDeleteNote(note); setActiveMenuId(null); }} className="px-3 py-2 text-left text-[10px] hover:bg-[var(--ui-bg)] flex items-center gap-2 text-red-400"><Trash2 size={10}/> Delete</button>

@@ -380,6 +380,65 @@ export const refineNoteContent = async (
   }
 };
 
+export const deepenNoteContent = async (
+  config: GenerationConfig,
+  currentContent: string,
+  instruction: string,
+  files: UploadedFile[],
+  additionalContexts?: Record<string, string>
+): Promise<string> => {
+  const ai = getAIClient(config);
+  const modelName = config.model.includes('gemini') ? config.model : 'gemini-3-flash-preview';
+
+  let contextString = "";
+  if (additionalContexts && Object.keys(additionalContexts).length > 0) {
+      contextString = "\n\n*** ADDITIONAL REFERENCE CONTEXT ***\n";
+      Object.entries(additionalContexts).forEach(([id, content]) => {
+          contextString += `\n--- SOURCE: ${id} ---\n${content.substring(0, 5000)}\n`;
+      });
+  }
+
+  const prompt = `
+  ROLE: Expert Medical Editor & Professor.
+  TASK: DEEPEN and ENRICH the existing Medical Note using the provided context materials.
+
+  USER INSTRUCTION: "${instruction || 'Deepen the note using the provided context.'}"
+
+  RULES FOR DEEPENING:
+  1. DO NOT DELETE OR SUMMARIZE existing information. Your job is to EXPAND it.
+  2. Integrate new facts, mechanisms, clinical correlations, and details from the Context into the existing structure.
+  3. If the Context contains new relevant topics not in the original note, add them as new sections at the end or where logically appropriate.
+  4. Maintain the original Markdown formatting (Headers, Lists, etc.).
+  5. The final output must be a comprehensive, combined note. DO NOT output a conversational response, ONLY the new Markdown note.
+  6. Write extensively. Do not be brief.
+
+  ORIGINAL CONTENT:
+  """
+  ${currentContent}
+  """
+  ${contextString}
+  `;
+
+  const parts: any[] = [{ text: prompt }];
+  if (files && files.length > 0) {
+      files.forEach(f => parts.push({ inlineData: { mimeType: f.mimeType, data: f.data } }));
+  }
+
+  try {
+      const response = await ai.models.generateContent({
+          model: modelName,
+          contents: { parts },
+          config: { temperature: 0.3, maxOutputTokens: 65536 }
+      });
+
+      const text = response.text || currentContent;
+      return processGeneratedNote(text);
+  } catch (e: any) {
+      console.error("Gemini Deepen Error", e);
+      throw new Error("Failed to deepen content: " + e.message);
+  }
+};
+
 /* -------------------------------------------------------------------------- */
 /*                       NEURO-SIDEKICK CHAT ENGINE                           */
 /* -------------------------------------------------------------------------- */
@@ -443,10 +502,19 @@ export const generateAssistantResponse = async (
   config: GenerationConfig,
   currentContent: string,
   history: ChatMessage[],
-  files: UploadedFile[]
+  files: UploadedFile[],
+  additionalContexts?: Record<string, string>
 ): Promise<string> => {
   const ai = getAIClient(config);
   const modelName = config.model.includes('gemini') ? config.model : 'gemini-3-flash-preview';
+
+  let contextString = "";
+  if (additionalContexts && Object.keys(additionalContexts).length > 0) {
+      contextString = "\n\n*** ADDITIONAL REFERENCE CONTEXT ***\n";
+      Object.entries(additionalContexts).forEach(([id, content]) => {
+          contextString += `\n--- SOURCE: ${id} ---\n${content.substring(0, 5000)}\n`;
+      });
+  }
 
   const systemPrompt = `
   ROLE: Intelligent Medical Assistant (Neuro-Sidekick).
@@ -455,12 +523,14 @@ export const generateAssistantResponse = async (
   """
   ${currentContent.substring(0, 20000)} ... (truncated)
   """
+  ${contextString}
 
   INSTRUCTION:
   - Provide a direct, high-quality response to the user's request.
   - If asked to add content, write it in Markdown format matching the note's style.
   - If asked to summarize, provide a concise summary.
   - Do NOT repeat the user's prompt.
+  - Use the Additional Reference Context if relevant to answer the user's question.
 
   *** TOOL CAPABILITIES ***
   - You can create sticky notes for the user. 

@@ -1,33 +1,56 @@
 import React, { useState, useCallback, useEffect, useRef } from 'react';
-import { UploadCloud, Send, StickyNote, FileText, X, Loader2, Bot, User, Copy, Check } from 'lucide-react';
+import { UploadCloud, Send, StickyNote, FileText, X, Loader2, Bot, User, Copy, Check, Book, Plus, Layers } from 'lucide-react';
 import ReactMarkdown from 'react-markdown';
 import { HistoryItem, AIProvider, AppModel, GEMINI_MODELS_LIST, ChatMessage } from '../types';
+import { StorageService } from '../services/storageService';
 
 interface AssistantPanelProps {
   noteMetadata?: HistoryItem['metadata'];
-  onPromptSubmit: (history: ChatMessage[], files: File[], provider?: AIProvider, model?: string) => Promise<string>;
+  onPromptSubmit: (history: ChatMessage[], files: File[], provider?: AIProvider, model?: string, contextIds?: string[]) => Promise<string>;
+  onDeepenNote?: (instruction: string, files: File[], provider?: AIProvider, model?: string, contextIds?: string[]) => Promise<string>;
   isProcessing: boolean;
   groqModels?: {value: string, label: string, badge: string}[];
 }
 
-const AssistantPanel: React.FC<AssistantPanelProps> = ({ noteMetadata, onPromptSubmit, isProcessing, groqModels = [] }) => {
+const AssistantPanel: React.FC<AssistantPanelProps> = ({ noteMetadata, onPromptSubmit, onDeepenNote, isProcessing, groqModels = [] }) => {
   const [prompt, setPrompt] = useState('');
   const [files, setFiles] = useState<File[]>([]);
   const [provider, setProvider] = useState<AIProvider>(AIProvider.GEMINI);
   const [model, setModel] = useState<string>(AppModel.GEMINI_2_5_FLASH);
   
+  // Context Injection State
+  const [availableNotes, setAvailableNotes] = useState<HistoryItem[]>([]);
+  const [selectedContextIds, setSelectedContextIds] = useState<string[]>([]);
+  const [showContextPicker, setShowContextPicker] = useState(false);
+
+  useEffect(() => {
+      const notes = StorageService.getInstance().getLocalNotesMetadata();
+      setAvailableNotes(notes);
+  }, []);
+
+  const toggleContext = (id: string) => {
+      setSelectedContextIds(prev => 
+          prev.includes(id) ? prev.filter(cid => cid !== id) : [...prev, id]
+      );
+  };
+  
   const [messages, setMessages] = useState<ChatMessage[]>([
       { role: 'model', content: "Hi! I'm your Neuro-Sidekick. Ask me anything about this note." }
   ]);
-  const messagesEndRef = useRef<HTMLDivElement>(null);
+  const scrollContainerRef = useRef<HTMLDivElement>(null);
 
   const scrollToBottom = () => {
-    messagesEndRef.current?.scrollIntoView({ behavior: "smooth" });
+    if (scrollContainerRef.current) {
+      scrollContainerRef.current.scrollTo({
+        top: scrollContainerRef.current.scrollHeight,
+        behavior: "smooth"
+      });
+    }
   };
 
   useEffect(() => {
     scrollToBottom();
-  }, [messages]);
+  }, [messages, isProcessing]);
 
   const handleDrop = useCallback((e: React.DragEvent) => {
     e.preventDefault();
@@ -64,10 +87,30 @@ const AssistantPanel: React.FC<AssistantPanelProps> = ({ noteMetadata, onPromptS
     setFiles([]); 
 
     try {
-        const response = await onPromptSubmit(newHistory, files, provider, model);
+        const response = await onPromptSubmit(newHistory, files, provider, model, selectedContextIds);
         setMessages(prev => [...prev, { role: 'model', content: response }]);
     } catch (e) {
         setMessages(prev => [...prev, { role: 'model', content: "Sorry, I encountered an error." }]);
+    }
+  };
+
+  const handleDeepen = async () => {
+    if (isProcessing || !onDeepenNote) return;
+    
+    const userMsg: ChatMessage = { role: 'user', content: prompt || "Deepen this note using the provided context." };
+    const newHistory = [...messages, userMsg];
+    
+    setMessages(newHistory);
+    const currentPrompt = prompt;
+    setPrompt('');
+    const currentFiles = [...files];
+    setFiles([]); 
+
+    try {
+        const response = await onDeepenNote(currentPrompt, currentFiles, provider, model, selectedContextIds);
+        setMessages(prev => [...prev, { role: 'model', content: response }]);
+    } catch (e) {
+        setMessages(prev => [...prev, { role: 'model', content: "Sorry, I encountered an error while deepening the note." }]);
     }
   };
 
@@ -117,7 +160,7 @@ const AssistantPanel: React.FC<AssistantPanelProps> = ({ noteMetadata, onPromptS
       </div>
 
       {/* SCROLLABLE CONTENT */}
-      <div className="flex-1 overflow-y-auto custom-scrollbar p-4 space-y-4 bg-[var(--ui-bg)]">
+      <div ref={scrollContainerRef} className="flex-1 overflow-y-auto custom-scrollbar p-4 space-y-4 bg-[var(--ui-bg)]">
         
         {/* STICKIES (Context) */}
         {noteMetadata?.stickies && noteMetadata.stickies.length > 0 && (
@@ -164,11 +207,27 @@ const AssistantPanel: React.FC<AssistantPanelProps> = ({ noteMetadata, onPromptS
                 </div>
             </div>
         )}
-        <div ref={messagesEndRef} />
       </div>
 
       {/* INPUT AREA */}
       <div className="p-3 bg-[var(--ui-surface)] border-t border-[var(--ui-border)]">
+        {/* Context Chips */}
+        {selectedContextIds.length > 0 && (
+            <div className="flex gap-2 mb-2 overflow-x-auto pb-2">
+                {selectedContextIds.map(id => {
+                    const note = availableNotes.find(n => n.id === id);
+                    if (!note) return null;
+                    return (
+                        <div key={id} className="bg-indigo-100 text-indigo-800 border border-indigo-200 rounded px-2 py-1 text-[10px] flex items-center gap-1 shrink-0">
+                            <Book size={10}/>
+                            <span className="max-w-[80px] truncate">{note.topic}</span>
+                            <button onClick={() => toggleContext(id)} className="hover:text-indigo-500"><X size={10}/></button>
+                        </div>
+                    );
+                })}
+            </div>
+        )}
+
         {files.length > 0 && (
             <div className="flex gap-2 mb-2 overflow-x-auto pb-2">
                 {files.map((f, i) => (
@@ -181,12 +240,44 @@ const AssistantPanel: React.FC<AssistantPanelProps> = ({ noteMetadata, onPromptS
             </div>
         )}
         
+        {/* Context Picker Modal */}
+        {showContextPicker && (
+            <div className="absolute bottom-16 left-4 right-4 bg-[var(--ui-surface)] border border-[var(--ui-border)] shadow-xl rounded-xl p-3 max-h-60 overflow-y-auto z-50">
+                <div className="flex justify-between items-center mb-2 pb-2 border-b border-[var(--ui-border)]">
+                    <span className="text-xs font-bold">Select Context Notes</span>
+                    <button onClick={() => setShowContextPicker(false)}><X size={14}/></button>
+                </div>
+                <div className="space-y-1">
+                    {availableNotes.map(note => (
+                        <div 
+                            key={note.id} 
+                            onClick={() => toggleContext(note.id)}
+                            className={`p-2 rounded text-xs cursor-pointer flex items-center gap-2 ${selectedContextIds.includes(note.id) ? 'bg-indigo-50 text-indigo-700' : 'hover:bg-[var(--ui-bg)]'}`}
+                        >
+                            <div className={`w-3 h-3 rounded border flex items-center justify-center ${selectedContextIds.includes(note.id) ? 'bg-indigo-500 border-indigo-500' : 'border-gray-400'}`}>
+                                {selectedContextIds.includes(note.id) && <Check size={8} className="text-white"/>}
+                            </div>
+                            <span className="truncate">{note.topic}</span>
+                        </div>
+                    ))}
+                </div>
+            </div>
+        )}
+
         <div 
             className="flex items-center gap-2 bg-[var(--ui-bg)] border border-[var(--ui-border)] rounded-xl px-3 py-2 focus-within:ring-1 focus-within:ring-[var(--ui-primary)] transition-all"
             onDragOver={(e) => e.preventDefault()}
             onDrop={handleDrop}
             onPaste={handlePaste}
         >
+            <button 
+                onClick={() => setShowContextPicker(!showContextPicker)}
+                className={`p-1 rounded hover:bg-[var(--ui-surface)] transition-colors ${selectedContextIds.length > 0 ? 'text-indigo-500' : 'text-[var(--ui-text-muted)]'}`}
+                title="Add Context from Notes"
+            >
+                <Book size={16}/>
+            </button>
+
             <label className="cursor-pointer text-[var(--ui-text-muted)] hover:text-[var(--ui-primary)] transition-colors">
                 <input type="file" multiple className="hidden" onChange={handleFileSelect}/>
                 <UploadCloud size={18}/>
@@ -203,9 +294,19 @@ const AssistantPanel: React.FC<AssistantPanelProps> = ({ noteMetadata, onPromptS
             />
             
             <button 
+                onClick={handleDeepen}
+                disabled={isProcessing || (files.length === 0 && selectedContextIds.length === 0 && !prompt.trim())}
+                className="text-indigo-500 disabled:opacity-30 hover:scale-110 transition-transform"
+                title="Deepen Note with Context"
+            >
+                <Layers size={18}/>
+            </button>
+
+            <button 
                 onClick={handleSubmit}
                 disabled={(!prompt.trim() && files.length === 0) || isProcessing}
                 className="text-[var(--ui-primary)] disabled:opacity-30 hover:scale-110 transition-transform"
+                title="Send to Assistant"
             >
                 <Send size={18}/>
             </button>
