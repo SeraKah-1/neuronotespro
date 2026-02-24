@@ -30,7 +30,7 @@ const NeuralVault: React.FC<NeuralVaultProps> = ({ onSelectNote, onImportCloud }
   const loadVault = async () => {
     setLoading(true);
     try {
-        const unified = await storage.getUnifiedNotes();
+        const unified = await storage.getUnifiedNotes(true);
         setNotes(unified);
     } catch (e) {
         console.error("Vault Load Error", e);

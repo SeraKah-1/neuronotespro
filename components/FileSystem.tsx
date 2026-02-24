@@ -38,12 +38,12 @@ const FileSystem: React.FC<FileSystemProps> = ({ onSelectNote, activeNoteId }) =
   const menuRef = useRef<HTMLDivElement>(null);
 
   // --- CORE: DATA LOADER (OPTIMIZED) ---
-  const refreshData = useCallback(async () => {
+  const refreshData = useCallback(async (forceSync = false) => {
     setLoading(true);
     try {
         // PERF FIX: Load metadata ONLY. Do not load full content strings into the list view.
         // UPDATED: Use getUnifiedNotes to trigger Cloud Sync if connected
-        const n = await storage.getUnifiedNotes();
+        const n = await storage.getUnifiedNotes(forceSync);
         n.sort((a, b) => b.timestamp - a.timestamp);
         setNotes([...n]);
         
@@ -57,7 +57,7 @@ const FileSystem: React.FC<FileSystemProps> = ({ onSelectNote, activeNoteId }) =
   }, [storage]);
 
   useEffect(() => {
-    refreshData();
+    refreshData(true); // Force sync on initial mount
     
     const handleClickOutside = (event: MouseEvent) => {
       if (menuRef.current && !menuRef.current.contains(event.target as Node)) {
@@ -97,20 +97,20 @@ const FileSystem: React.FC<FileSystemProps> = ({ onSelectNote, activeNoteId }) =
     }
   };
 
-  const handleDeleteFolder = (id: string) => {
+  const handleDeleteFolder = async (id: string) => {
     if (confirm("Delete folder? Notes inside will be moved to root.")) {
-      storage.deleteFolder(id);
+      await storage.deleteFolder(id);
       refreshData();
     }
   };
 
-  const handleDrop = (targetFolderId: string | null) => {
+  const handleDrop = async (targetFolderId: string | null) => {
       if (draggedNoteId) {
-          storage.moveNoteToFolder(draggedNoteId, targetFolderId);
+          await storage.moveNoteToFolder(draggedNoteId, targetFolderId);
           refreshData();
           setDraggedNoteId(null);
           setDragOverFolderId(null);
-          if (targetFolderId) setExpandedFolders(prev => ({...prev, [targetFolderId]: true}));
+          if (targetFolderId && targetFolderId !== 'ROOT') setExpandedFolders(prev => ({...prev, [targetFolderId]: true}));
       }
   };
   
@@ -167,10 +167,10 @@ const FileSystem: React.FC<FileSystemProps> = ({ onSelectNote, activeNoteId }) =
   }, [notes, activeTab, searchQuery]);
 
 
-  const handleMoveNote = (noteId: string, folderId: string | null) => {
-      storage.moveNoteToFolder(noteId, folderId);
+  const handleMoveNote = async (noteId: string, folderId: string | null) => {
+      await storage.moveNoteToFolder(noteId, folderId);
       refreshData();
-      if (folderId) setExpandedFolders(prev => ({...prev, [folderId]: true}));
+      if (folderId && folderId !== 'ROOT') setExpandedFolders(prev => ({...prev, [folderId]: true}));
   };
 
   // --- SUB-COMPONENT: NOTE ROW ---
@@ -254,7 +254,7 @@ const FileSystem: React.FC<FileSystemProps> = ({ onSelectNote, activeNoteId }) =
             <span className="text-[10px] font-bold text-[var(--ui-text-muted)] uppercase tracking-widest">Explorer</span>
             <div className="flex gap-1">
                 <button onClick={handleCreateFolder} className="p-1.5 hover:bg-[var(--ui-bg)] rounded text-[var(--ui-text-muted)] hover:text-[var(--ui-text-main)]" title="New Folder"><FolderPlus size={14}/></button>
-                <button onClick={refreshData} className="p-1.5 hover:bg-[var(--ui-bg)] rounded text-[var(--ui-text-muted)] hover:text-[var(--ui-text-main)]" title="Refresh"><RefreshCw size={14} className={loading ? 'animate-spin' : ''}/></button>
+                <button onClick={() => refreshData(true)} className="p-1.5 hover:bg-[var(--ui-bg)] rounded text-[var(--ui-text-muted)] hover:text-[var(--ui-text-main)]" title="Refresh"><RefreshCw size={14} className={loading ? 'animate-spin' : ''}/></button>
             </div>
          </div>
          

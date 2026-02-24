@@ -4,7 +4,7 @@ import ReactMarkdown from 'react-markdown';
 import remarkGfm from 'remark-gfm';
 import remarkMath from 'remark-math';
 import rehypeKatex from 'rehype-katex';
-import { Download, Copy, Eye, Check, List, Book, Focus, Save, Edit3, CloudUpload, Clipboard, ClipboardCheck, EyeOff, MousePointerClick, BookOpen, Microscope, Activity, AlertTriangle, Info, Wand2, Search, X, HelpCircle, MessageSquareQuote, LayoutTemplate, Undo2, Redo2, Loader2, Workflow, Printer, FileDown, Maximize2, Minimize2, UploadCloud, ArrowLeft, StickyNote, Bot } from 'lucide-react';
+import { Download, Copy, Eye, Check, List, Book, Focus, Save, Edit3, CloudUpload, Clipboard, ClipboardCheck, EyeOff, MousePointerClick, BookOpen, Microscope, Activity, AlertTriangle, Info, Wand2, Search, X, HelpCircle, MessageSquareQuote, LayoutTemplate, Undo2, Redo2, Loader2, Workflow, Printer, FileDown, Maximize2, Minimize2, UploadCloud, ArrowLeft, StickyNote, Bot, Plus } from 'lucide-react';
 import { StorageService } from '../services/storageService';
 import { processGeneratedNote } from '../utils/formatter';
 import { refineNoteContent, generateAssistantResponse, deepenNoteContent } from '../services/geminiService';
@@ -107,6 +107,37 @@ const OutputDisplay: React.FC<OutputDisplayProps> = ({ content, topic, onUpdateC
   const [magicModel, setMagicModel] = useState<string>(config.model);
   const [isMagicLoading, setIsMagicLoading] = useState(false);
   const [isExportingPdf, setIsExportingPdf] = useState(false);
+  
+  const [magicPrompts, setMagicPrompts] = useState<string[]>([]);
+  const [showMagicPromptPicker, setShowMagicPromptPicker] = useState(false);
+
+  useEffect(() => {
+      const savedPrompts = localStorage.getItem('neuro_magic_prompts');
+      if (savedPrompts) {
+          try {
+              setMagicPrompts(JSON.parse(savedPrompts));
+          } catch (e) {
+              setMagicPrompts(["Add a table comparison", "Simplify language", "Fix grammar and spelling"]);
+          }
+      } else {
+          setMagicPrompts(["Add a table comparison", "Simplify language", "Fix grammar and spelling"]);
+      }
+  }, []);
+
+  const saveMagicPrompt = () => {
+      if (!magicInstruction.trim()) return;
+      if (magicPrompts.includes(magicInstruction.trim())) return;
+      const newPrompts = [...magicPrompts, magicInstruction.trim()];
+      setMagicPrompts(newPrompts);
+      localStorage.setItem('neuro_magic_prompts', JSON.stringify(newPrompts));
+      alert("Prompt saved!");
+  };
+
+  const deleteMagicPrompt = (promptToDelete: string) => {
+      const newPrompts = magicPrompts.filter(p => p !== promptToDelete);
+      setMagicPrompts(newPrompts);
+      localStorage.setItem('neuro_magic_prompts', JSON.stringify(newPrompts));
+  };
 
   const [showDiagramsModal, setShowDiagramsModal] = useState(false);
   const [extractedDiagrams, setExtractedDiagrams] = useState<string[]>([]);
@@ -168,6 +199,45 @@ const OutputDisplay: React.FC<OutputDisplayProps> = ({ content, topic, onUpdateC
       }
   };
 
+  const [selectionMenu, setSelectionMenu] = useState<{x: number, y: number, text: string} | null>(null);
+  const [externalPrompt, setExternalPrompt] = useState<string | undefined>(undefined);
+
+  useEffect(() => {
+      const handleSelection = () => {
+          // Only show menu if we are in preview mode and not selecting inside a textarea/input
+          const activeEl = document.activeElement;
+          if (activeEl && (activeEl.tagName === 'TEXTAREA' || activeEl.tagName === 'INPUT')) {
+              setSelectionMenu(null);
+              return;
+          }
+
+          const selection = window.getSelection();
+          if (selection && selection.toString().trim().length > 0) {
+              const range = selection.getRangeAt(0);
+              const rect = range.getBoundingClientRect();
+              setSelectionMenu({
+                  x: rect.left + (rect.width / 2),
+                  y: rect.top - 40,
+                  text: selection.toString().trim()
+              });
+          } else {
+              setSelectionMenu(null);
+          }
+      };
+
+      document.addEventListener('mouseup', handleSelection);
+      // Also hide on scroll to prevent floating menu from detaching
+      const scrollContainer = scrollRef.current;
+      if (scrollContainer) {
+          scrollContainer.addEventListener('scroll', () => setSelectionMenu(null));
+      }
+
+      return () => {
+          document.removeEventListener('mouseup', handleSelection);
+          if (scrollContainer) scrollContainer.removeEventListener('scroll', () => setSelectionMenu(null));
+      };
+  }, []);
+
   const addSticky = (text: string, color: StickyNoteType['color'] = 'yellow') => {
       const newSticky: StickyNoteType = {
           id: Date.now().toString(),
@@ -175,15 +245,21 @@ const OutputDisplay: React.FC<OutputDisplayProps> = ({ content, topic, onUpdateC
           color,
           timestamp: Date.now()
       };
-      const newStickies = [...stickies, newSticky];
+      // Add to top so it's immediately visible
+      const newStickies = [newSticky, ...stickies];
       setStickies(newStickies);
       saveStickiesToMetadata(newStickies);
       setRightPanelTab('stickies');
       setIsRightPanelOpen(true);
+      setSelectionMenu(null);
+      
+      // Clear selection
+      window.getSelection()?.removeAllRanges();
+
       setTimeout(() => {
           if (stickiesContainerRef.current) {
               stickiesContainerRef.current.scrollTo({
-                  top: stickiesContainerRef.current.scrollHeight,
+                  top: 0,
                   behavior: 'smooth'
               });
           }
@@ -502,25 +578,6 @@ const OutputDisplay: React.FC<OutputDisplayProps> = ({ content, topic, onUpdateC
               response = await generateAssistantResponseGroq(tempConfig, editableContent, history, uploadedFiles, additionalContexts);
           }
 
-          // CHECK FOR STICKY COMMANDS
-          // Format: {{STICKY: text}} or {{STICKY|color: text}}
-          const stickyRegex = /\{\{STICKY(?:\|(\w+))?:(.*?)\}\}/g;
-          let match;
-          let hasSticky = false;
-          while ((match = stickyRegex.exec(response)) !== null) {
-              hasSticky = true;
-              const color = (match[1] as any) || 'yellow';
-              const text = match[2].trim();
-              addSticky(text, color);
-          }
-          
-          // Remove sticky commands from response to show clean text
-          response = response.replace(stickyRegex, '').trim();
-          
-          if (hasSticky && !response) {
-              response = "I've added a sticky note for you.";
-          }
-
           return response;
       } catch (e: any) {
           alert("Assistant Error: " + e.message);
@@ -632,28 +689,51 @@ const OutputDisplay: React.FC<OutputDisplayProps> = ({ content, topic, onUpdateC
   return (
     <div className="h-full flex flex-col relative font-sans bg-[var(--ui-bg)]">
       
+      {/* FLOATING SELECTION MENU */}
+      {selectionMenu && activeTab === 'preview' && (
+          <div 
+              className="fixed z-[100] animate-fade-in shadow-xl"
+              style={{ 
+                  left: `${selectionMenu.x}px`, 
+                  top: `${selectionMenu.y}px`,
+                  transform: 'translate(-50%, -100%)'
+              }}
+          >
+              <button 
+                  onClick={() => addSticky(selectionMenu.text, 'yellow')}
+                  className="bg-[var(--ui-surface)] border border-[var(--ui-border)] text-[var(--ui-text-main)] px-3 py-1.5 rounded-lg text-xs font-bold flex items-center gap-2 hover:bg-[var(--ui-bg)] transition-colors"
+              >
+                  <StickyNote size={12} className="text-yellow-500"/>
+                  Add to Sticky
+              </button>
+              {/* Little triangle pointer */}
+              <div className="absolute left-1/2 bottom-[-6px] -translate-x-1/2 w-0 h-0 border-l-[6px] border-l-transparent border-r-[6px] border-r-transparent border-t-[6px] border-t-[var(--ui-border)]"></div>
+              <div className="absolute left-1/2 bottom-[-5px] -translate-x-1/2 w-0 h-0 border-l-[5px] border-l-transparent border-r-[5px] border-r-transparent border-t-[5px] border-t-[var(--ui-surface)]"></div>
+          </div>
+      )}
+
       {/* --- TOOLBAR (TOP STICKY) --- */}
-      <div className="sticky top-0 z-50 flex items-center justify-between px-4 py-3 bg-[var(--ui-surface)]/95 backdrop-blur-md border-b border-[var(--ui-border)] shadow-sm">
+      <div className="sticky top-0 z-50 flex items-center justify-between px-2 md:px-4 py-2 md:py-3 bg-[var(--ui-surface)]/95 backdrop-blur-md border-b border-[var(--ui-border)] shadow-sm gap-2">
           
-          <div className="flex items-center gap-2">
+          <div className="flex items-center gap-1 md:gap-2 shrink-0">
               <button 
                   onClick={onExit} 
-                  className="mr-2 p-2 rounded-lg text-[var(--ui-text-muted)] hover:bg-[var(--ui-bg)] hover:text-[var(--ui-text-main)] transition-colors"
+                  className="p-2 rounded-lg text-[var(--ui-text-muted)] hover:bg-[var(--ui-bg)] hover:text-[var(--ui-text-main)] transition-colors"
                   title="Back to Workspace"
               >
                   <ArrowLeft size={18}/>
               </button>
 
               <div className="flex bg-[var(--ui-bg)] rounded-lg p-0.5 border border-[var(--ui-border)]">
-                  <button onClick={() => setActiveTab('preview')} className={`px-3 py-1.5 rounded-md text-xs font-bold transition-all flex items-center gap-1 ${activeTab === 'preview' ? 'bg-[var(--ui-surface)] shadow text-[var(--ui-text-main)]' : 'text-[var(--ui-text-muted)] hover:text-[var(--ui-text-main)]'}`}><BookOpen size={14}/> Read</button>
-                  <button onClick={() => setActiveTab('code')} className={`px-3 py-1.5 rounded-md text-xs font-bold transition-all flex items-center gap-1 ${activeTab === 'code' ? 'bg-[var(--ui-surface)] shadow text-[var(--ui-text-main)]' : 'text-[var(--ui-text-muted)] hover:text-[var(--ui-text-main)]'}`}><Edit3 size={14}/> Code</button>
+                  <button onClick={() => setActiveTab('preview')} className={`px-2 md:px-3 py-1.5 rounded-md text-[10px] md:text-xs font-bold transition-all flex items-center gap-1 ${activeTab === 'preview' ? 'bg-[var(--ui-surface)] shadow text-[var(--ui-text-main)]' : 'text-[var(--ui-text-muted)] hover:text-[var(--ui-text-main)]'}`}><BookOpen size={14}/><span className="hidden sm:inline">Read</span></button>
+                  <button onClick={() => setActiveTab('code')} className={`px-2 md:px-3 py-1.5 rounded-md text-[10px] md:text-xs font-bold transition-all flex items-center gap-1 ${activeTab === 'code' ? 'bg-[var(--ui-surface)] shadow text-[var(--ui-text-main)]' : 'text-[var(--ui-text-muted)] hover:text-[var(--ui-text-main)]'}`}><Edit3 size={14}/><span className="hidden sm:inline">Code</span></button>
               </div>
           </div>
 
-          <div className="flex items-center gap-2">
+          <div className="flex items-center gap-1 md:gap-2 overflow-x-auto custom-scrollbar no-scrollbar pb-1 flex-1 justify-end">
               <button 
                 onClick={() => setShowToc(!showToc)} 
-                className={`p-2 rounded-lg text-[var(--ui-text-muted)] hover:bg-[var(--ui-bg)] hover:text-[var(--ui-text-main)] ${showToc ? 'bg-[var(--ui-bg)] text-[var(--ui-primary)]' : ''} hidden md:block`} 
+                className={`p-2 rounded-lg text-[var(--ui-text-muted)] hover:bg-[var(--ui-bg)] hover:text-[var(--ui-text-main)] shrink-0 ${showToc ? 'bg-[var(--ui-bg)] text-[var(--ui-primary)]' : ''}`} 
                 title="Outline"
               >
                 <List size={18}/>
@@ -662,7 +742,7 @@ const OutputDisplay: React.FC<OutputDisplayProps> = ({ content, topic, onUpdateC
               <button 
                 onClick={handleExportPdf} 
                 disabled={isExportingPdf} 
-                className="p-2 rounded-lg text-[var(--ui-text-muted)] hover:bg-[var(--ui-bg)] hover:text-[var(--ui-text-main)] hidden md:block" 
+                className="p-2 rounded-lg text-[var(--ui-text-muted)] hover:bg-[var(--ui-bg)] hover:text-[var(--ui-text-main)] shrink-0" 
                 title="PDF"
               >
                 {isExportingPdf ? <Loader2 size={18} className="animate-spin"/> : <FileDown size={18}/>}
@@ -670,7 +750,7 @@ const OutputDisplay: React.FC<OutputDisplayProps> = ({ content, topic, onUpdateC
 
               <button 
                 onClick={extractMermaidDiagrams} 
-                className="p-2 rounded-lg text-[var(--ui-text-muted)] hover:bg-[var(--ui-bg)] hover:text-[var(--ui-text-main)] hidden md:block" 
+                className="p-2 rounded-lg text-[var(--ui-text-muted)] hover:bg-[var(--ui-bg)] hover:text-[var(--ui-text-main)] shrink-0" 
                 title="Diagrams"
               >
                 <Workflow size={18}/>
@@ -678,7 +758,7 @@ const OutputDisplay: React.FC<OutputDisplayProps> = ({ content, topic, onUpdateC
 
               <button 
                 onClick={() => setSensorMode(!sensorMode)} 
-                className={`p-2 rounded-lg ${sensorMode ? 'bg-amber-100 text-amber-600' : 'text-[var(--ui-text-muted)] hover:bg-[var(--ui-bg)]'}`} 
+                className={`p-2 rounded-lg shrink-0 ${sensorMode ? 'bg-amber-100 text-amber-600' : 'text-[var(--ui-text-muted)] hover:bg-[var(--ui-bg)]'}`} 
                 title="Sensor Mode"
               >
                 <EyeOff size={18}/>
@@ -686,7 +766,7 @@ const OutputDisplay: React.FC<OutputDisplayProps> = ({ content, topic, onUpdateC
 
               <button 
                 onClick={() => setShowMagicEdit(!showMagicEdit)} 
-                className="p-2 rounded-lg text-[var(--ui-text-muted)] hover:bg-[var(--ui-bg)] hover:text-indigo-500" 
+                className="p-2 rounded-lg text-[var(--ui-text-muted)] hover:bg-[var(--ui-bg)] hover:text-indigo-500 shrink-0" 
                 title="Magic Edit"
               >
                 <Wand2 size={18}/>
@@ -694,22 +774,22 @@ const OutputDisplay: React.FC<OutputDisplayProps> = ({ content, topic, onUpdateC
 
               <button 
                 onClick={handleCloudUpload} 
-                className="p-2 rounded-lg text-[var(--ui-text-muted)] hover:bg-[var(--ui-bg)] hover:text-cyan-500" 
+                className="p-2 rounded-lg text-[var(--ui-text-muted)] hover:bg-[var(--ui-bg)] hover:text-cyan-500 shrink-0" 
                 title="Upload Cloud"
               >
                 <UploadCloud size={18}/>
               </button>
               
-              <div className="w-[1px] h-6 bg-[var(--ui-border)] mx-1"></div>
+              <div className="w-[1px] h-6 bg-[var(--ui-border)] mx-1 shrink-0"></div>
 
-              <button onClick={undo} disabled={historyIndex === 0} className="p-2 rounded-lg text-[var(--ui-text-muted)] hover:bg-[var(--ui-bg)] disabled:opacity-30"><Undo2 size={18}/></button>
-              <button onClick={redo} disabled={historyIndex === history.length - 1} className="p-2 rounded-lg text-[var(--ui-text-muted)] hover:bg-[var(--ui-bg)] disabled:opacity-30"><Redo2 size={18}/></button>
+              <button onClick={undo} disabled={historyIndex === 0} className="p-2 rounded-lg text-[var(--ui-text-muted)] hover:bg-[var(--ui-bg)] disabled:opacity-30 shrink-0"><Undo2 size={18}/></button>
+              <button onClick={redo} disabled={historyIndex === history.length - 1} className="p-2 rounded-lg text-[var(--ui-text-muted)] hover:bg-[var(--ui-bg)] disabled:opacity-30 shrink-0"><Redo2 size={18}/></button>
 
-              <div className="w-[1px] h-6 bg-[var(--ui-border)] mx-1"></div>
+              <div className="w-[1px] h-6 bg-[var(--ui-border)] mx-1 shrink-0"></div>
 
               <button 
                   onClick={() => setIsRightPanelOpen(!isRightPanelOpen)} 
-                  className={`p-2 rounded-lg transition-colors ${isRightPanelOpen ? 'bg-[var(--ui-primary)]/10 text-[var(--ui-primary)]' : 'text-[var(--ui-text-muted)] hover:bg-[var(--ui-bg)] hover:text-[var(--ui-text-main)]'}`}
+                  className={`p-2 rounded-lg transition-colors shrink-0 ${isRightPanelOpen ? 'bg-[var(--ui-primary)]/10 text-[var(--ui-primary)]' : 'text-[var(--ui-text-muted)] hover:bg-[var(--ui-bg)] hover:text-[var(--ui-text-main)]'}`}
                   title="Toggle Assistant Panel"
               >
                   <Bot size={18}/>
@@ -718,10 +798,10 @@ const OutputDisplay: React.FC<OutputDisplayProps> = ({ content, topic, onUpdateC
               <button 
                   onClick={handleManualSaveTrigger} 
                   disabled={isSaving}
-                  className={`ml-2 px-4 py-2 rounded-lg font-bold text-xs flex items-center gap-2 transition-all ${justSaved ? 'bg-green-500 text-white' : (isDirty ? 'bg-[var(--ui-primary)] text-white hover:opacity-90' : 'bg-[var(--ui-bg)] text-[var(--ui-text-muted)] border border-[var(--ui-border)]')}`}
+                  className={`ml-1 px-3 py-1.5 md:px-4 md:py-2 rounded-lg font-bold text-xs flex items-center gap-1 md:gap-2 transition-all shrink-0 ${justSaved ? 'bg-green-500 text-white' : (isDirty ? 'bg-[var(--ui-primary)] text-white hover:opacity-90' : 'bg-[var(--ui-bg)] text-[var(--ui-text-muted)] border border-[var(--ui-border)]')}`}
               >
                   {isSaving ? <Loader2 size={14} className="animate-spin"/> : justSaved ? <Check size={14}/> : <Save size={14}/>}
-                  <span className="hidden md:inline">{justSaved ? 'Saved' : 'Save'}</span>
+                  <span className="hidden sm:inline">{justSaved ? 'Saved' : 'Save'}</span>
               </button>
           </div>
       </div>
@@ -747,8 +827,50 @@ const OutputDisplay: React.FC<OutputDisplayProps> = ({ content, topic, onUpdateC
                       ))}
                   </select>
               </div>
-              <div className="max-w-2xl mx-auto flex items-center gap-2 bg-[var(--ui-bg)] border border-[var(--ui-border)] rounded-lg px-3 py-2 w-full">
-                  <Wand2 size={16} className="text-[var(--ui-primary)]"/>
+              <div className="max-w-2xl mx-auto flex items-center gap-2 bg-[var(--ui-bg)] border border-[var(--ui-border)] rounded-lg px-3 py-2 w-full relative">
+                  <button 
+                      onClick={() => setShowMagicPromptPicker(!showMagicPromptPicker)}
+                      className={`p-1 rounded hover:bg-[var(--ui-surface)] transition-colors ${showMagicPromptPicker ? 'text-[var(--ui-primary)]' : 'text-[var(--ui-text-muted)]'}`}
+                      title="Custom Prompts"
+                  >
+                      <Wand2 size={16}/>
+                  </button>
+                  
+                  {/* Magic Prompt Picker Modal */}
+                  {showMagicPromptPicker && (
+                      <div className="absolute top-full left-0 mt-2 w-64 bg-[var(--ui-surface)] border border-[var(--ui-border)] shadow-xl rounded-xl p-3 max-h-60 overflow-y-auto z-50">
+                          <div className="flex justify-between items-center mb-2 pb-2 border-b border-[var(--ui-border)]">
+                              <span className="text-xs font-bold">Custom Prompts</span>
+                              <button onClick={() => setShowMagicPromptPicker(false)}><X size={14}/></button>
+                          </div>
+                          <div className="space-y-1 mb-2">
+                              {magicPrompts.map((p, idx) => (
+                                  <div key={idx} className="flex items-center justify-between group p-2 rounded text-xs hover:bg-[var(--ui-bg)]">
+                                      <span 
+                                          className="cursor-pointer flex-1 truncate mr-2" 
+                                          onClick={() => { setMagicInstruction(p); setShowMagicPromptPicker(false); }}
+                                      >
+                                          {p}
+                                      </span>
+                                      <button 
+                                          onClick={() => deleteMagicPrompt(p)}
+                                          className="opacity-0 group-hover:opacity-100 text-red-400 hover:text-red-600 transition-opacity"
+                                      >
+                                          <X size={12}/>
+                                      </button>
+                                  </div>
+                              ))}
+                          </div>
+                          <button 
+                              onClick={saveMagicPrompt}
+                              disabled={!magicInstruction.trim() || magicPrompts.includes(magicInstruction.trim())}
+                              className="w-full py-1.5 text-xs bg-[var(--ui-primary)]/10 text-[var(--ui-primary)] rounded hover:bg-[var(--ui-primary)]/20 disabled:opacity-50 transition-colors flex items-center justify-center gap-1"
+                          >
+                              <Save size={12}/> Save Current Prompt
+                          </button>
+                      </div>
+                  )}
+
                   <input 
                       autoFocus
                       type="text" 
@@ -841,8 +963,16 @@ const OutputDisplay: React.FC<OutputDisplayProps> = ({ content, topic, onUpdateC
 
           {/* RIGHT PANE: ASSISTANT & STICKIES (30%) */}
           {isRightPanelOpen && (
-              <div className="w-[30%] min-w-[320px] hidden lg:flex flex-col h-full border-l border-[var(--ui-border)] bg-[var(--ui-surface)] animate-slide-left">
+              <div className="absolute inset-0 z-40 lg:relative lg:inset-auto lg:z-auto w-full lg:w-[30%] lg:min-w-[320px] flex flex-col h-full border-l border-[var(--ui-border)] bg-[var(--ui-surface)] animate-slide-left">
                   
+                  {/* MOBILE CLOSE BUTTON */}
+                  <div className="lg:hidden flex justify-between items-center p-2 border-b border-[var(--ui-border)] bg-[var(--ui-bg)]">
+                      <span className="text-xs font-bold text-[var(--ui-text-muted)] uppercase">Assistant Panel</span>
+                      <button onClick={() => setIsRightPanelOpen(false)} className="p-2 rounded-lg text-[var(--ui-text-muted)] hover:bg-[var(--ui-surface)]">
+                          <X size={18}/>
+                      </button>
+                  </div>
+
                   {/* TABS */}
                   <div className="flex border-b border-[var(--ui-border)]">
                       <button 
@@ -868,17 +998,20 @@ const OutputDisplay: React.FC<OutputDisplayProps> = ({ content, topic, onUpdateC
                               onDeepenNote={handleDeepenNote}
                               isProcessing={isAiProcessing}
                               groqModels={groqModels}
+                              externalPrompt={externalPrompt}
+                              onExternalPromptHandled={() => setExternalPrompt(undefined)}
+                              onAddSticky={addSticky}
                           />
                       ) : (
                           <div ref={stickiesContainerRef} className="h-full flex flex-col bg-[var(--ui-bg)] p-4 overflow-y-auto custom-scrollbar space-y-4">
                               <div className="flex justify-between items-center mb-2">
                                   <h3 className="text-xs font-bold text-[var(--ui-text-muted)] uppercase">Your Notes</h3>
                                   <button 
-                                      onClick={() => addSticky("New Note", 'yellow')}
+                                      onClick={() => addSticky("", 'yellow')}
                                       className="text-[var(--ui-primary)] hover:bg-[var(--ui-primary)]/10 p-1 rounded transition-colors"
                                       title="Add Sticky"
                                   >
-                                      <CloudUpload size={16} className="rotate-90"/> {/* Using CloudUpload as a 'plus' ish icon or just use text */}
+                                      <Plus size={16}/>
                                   </button>
                               </div>
                               
@@ -886,32 +1019,52 @@ const OutputDisplay: React.FC<OutputDisplayProps> = ({ content, topic, onUpdateC
                                   <div className="text-center py-10 opacity-30 flex flex-col items-center">
                                       <StickyNote size={40} className="mb-2"/>
                                       <p className="text-xs">No stickies yet</p>
-                                      <button onClick={() => addSticky("Don't forget to...", 'yellow')} className="mt-2 text-[var(--ui-primary)] text-xs hover:underline">Create one</button>
+                                      <button onClick={() => addSticky("", 'yellow')} className="mt-2 text-[var(--ui-primary)] text-xs hover:underline">Create one</button>
                                   </div>
                               )}
 
-                              {stickies.map((sticky) => (
+                              {stickies.map((sticky, index) => (
                                   <div 
                                       key={sticky.id} 
-                                      className={`relative group p-3 rounded-lg shadow-sm border transition-transform hover:scale-[1.02] ${
+                                      className={`relative group p-3 rounded-md shadow-sm border transition-all hover:shadow-md hover:-translate-y-0.5 ${
                                           sticky.color === 'yellow' ? 'bg-yellow-50 border-yellow-200 text-yellow-900' :
                                           sticky.color === 'blue' ? 'bg-blue-50 border-blue-200 text-blue-900' :
                                           sticky.color === 'green' ? 'bg-green-50 border-green-200 text-green-900' :
                                           'bg-pink-50 border-pink-200 text-pink-900'
                                       }`}
                                   >
+                                      {/* Folded corner effect */}
+                                      <div className="absolute bottom-0 right-0 w-3 h-3 bg-black/5 rounded-tl-sm pointer-events-none"></div>
+                                      
                                       <textarea 
+                                          autoFocus={index === 0 && sticky.text === ""}
                                           value={sticky.text}
+                                          placeholder="Type your note here..."
                                           onChange={(e) => {
                                               const newStickies = stickies.map(s => s.id === sticky.id ? { ...s, text: e.target.value } : s);
                                               setStickies(newStickies);
-                                              // Debounce save? For now save on blur
+                                              e.target.style.height = 'auto';
+                                              e.target.style.height = e.target.scrollHeight + 'px';
+                                          }}
+                                          onFocus={(e) => {
+                                              e.target.style.height = 'auto';
+                                              e.target.style.height = e.target.scrollHeight + 'px';
                                           }}
                                           onBlur={() => saveStickiesToMetadata(stickies)}
-                                          className="w-full bg-transparent outline-none resize-none text-xs font-medium min-h-[60px]"
+                                          className="w-full bg-transparent outline-none resize-none text-xs font-medium min-h-[60px] overflow-hidden placeholder:text-black/30"
                                       />
                                       <div className="absolute top-2 right-2 opacity-0 group-hover:opacity-100 transition-opacity flex gap-1">
-                                          <button onClick={() => deleteSticky(sticky.id)} className="text-red-400 hover:text-red-600"><X size={12}/></button>
+                                          <button 
+                                              onClick={() => {
+                                                  setExternalPrompt(`Explain this note: "${sticky.text}"`);
+                                                  setRightPanelTab('assistant');
+                                              }} 
+                                              className="text-[var(--ui-primary)] hover:text-indigo-600 p-0.5"
+                                              title="Ask AI about this"
+                                          >
+                                              <Bot size={12}/>
+                                          </button>
+                                          <button onClick={() => deleteSticky(sticky.id)} className="text-red-400 hover:text-red-600 p-0.5"><X size={12}/></button>
                                       </div>
                                       <div className="flex gap-1 mt-2 opacity-50 group-hover:opacity-100 transition-opacity">
                                           {['yellow', 'blue', 'green', 'pink'].map(c => (

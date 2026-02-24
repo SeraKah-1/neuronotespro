@@ -392,11 +392,6 @@ export const generateAssistantResponseGroq = async (
   - If asked to summarize, provide a concise summary.
   - Do NOT repeat the user's prompt.
   - Use the Additional Reference Context if relevant to answer the user's question.
-
-  *** TOOL CAPABILITIES ***
-  - You can create sticky notes for the user. 
-  - To create a sticky note, output: {{STICKY: content}} or {{STICKY|color: content}} (colors: yellow, blue, green, pink).
-  - Example: {{STICKY|blue: Review this mechanism later}}
   `;
 
   try {

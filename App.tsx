@@ -360,7 +360,7 @@ const AppContent: React.FC = () => {
   if (!isAuthenticated) { return <LoginGate onUnlock={handleAuthUnlock} />; }
 
   return (
-    <div className={`min-h-screen flex font-sans overflow-hidden transition-colors duration-300 theme-${currentTheme} bg-[var(--ui-bg)] text-[var(--ui-text-main)]`}>
+    <div className={`h-[100dvh] w-full flex font-sans overflow-hidden transition-colors duration-300 theme-${currentTheme} bg-[var(--ui-bg)] text-[var(--ui-text-main)]`}>
       
       <CommandPalette 
         isOpen={showPalette} 
@@ -374,7 +374,7 @@ const AppContent: React.FC = () => {
       />
 
       {/* --- 1. PRIMARY SIDEBAR (Desktop: Icon Strip, Mobile: Hidden) --- */}
-      <aside className={`hidden md:flex w-[70px] h-screen bg-[var(--ui-sidebar)] border-r border-[var(--ui-border)] flex-col items-center py-6 shrink-0 z-40 transition-all ${focusMode ? '-translate-x-full absolute' : 'relative'}`}>
+      <aside className={`hidden md:flex w-[70px] h-[100dvh] bg-[var(--ui-sidebar)] border-r border-[var(--ui-border)] flex-col items-center py-6 shrink-0 z-40 transition-all ${focusMode ? '-translate-x-full absolute' : 'relative'}`}>
          <div className="mb-8">
              <div className="w-10 h-10 bg-[var(--ui-primary)] rounded-xl flex items-center justify-center shadow-lg shadow-[var(--ui-primary)]/20">
                  <BrainCircuit className="text-white" size={22} />
@@ -396,7 +396,7 @@ const AppContent: React.FC = () => {
 
       {/* --- 2. SECONDARY SIDEBAR (Desktop: File Tree, Mobile: Slide-over) --- */}
       <aside className={`
-          w-[280px] h-screen bg-[var(--ui-sidebar-secondary)] border-r border-[var(--ui-border)] flex flex-col transition-all duration-300 z-30
+          w-[280px] h-[100dvh] bg-[var(--ui-sidebar-secondary)] border-r border-[var(--ui-border)] flex flex-col transition-all duration-300 z-30
           fixed md:relative left-0 top-0 bottom-0
           ${(focusMode || navCollapsed) ? 'md:w-0 md:opacity-0 md:overflow-hidden' : 'md:w-[280px] md:opacity-100'}
           ${mobileMenuOpen ? 'translate-x-0 shadow-2xl' : '-translate-x-full md:translate-x-0'}
@@ -417,7 +417,7 @@ const AppContent: React.FC = () => {
       {mobileMenuOpen && <div className="fixed inset-0 bg-black/50 z-20 md:hidden" onClick={() => setMobileMenuOpen(false)}></div>}
 
       {/* --- 3. MAIN CANVAS --- */}
-      <main className="flex-1 relative h-screen overflow-hidden flex flex-col bg-[var(--ui-bg)]">
+      <main className="flex-1 relative h-[100dvh] overflow-hidden flex flex-col bg-[var(--ui-bg)]">
          
          {/* MOBILE HEADER */}
          <div className="md:hidden h-14 bg-[var(--ui-sidebar)] border-b border-[var(--ui-border)] flex items-center justify-between px-4 shrink-0 z-20">

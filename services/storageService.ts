@@ -140,8 +140,8 @@ export class StorageService {
   }
 
   // Returns full notes (Metadata + Content) - Expensive, use carefully
-  public async getUnifiedNotes(): Promise<HistoryItem[]> {
-      if (this.supabase) {
+  public async getUnifiedNotes(forceSync = false): Promise<HistoryItem[]> {
+      if (this.supabase && forceSync) {
           await this.syncWithCloud();
       }
       return this.getLocalNotesMetadata();
@@ -377,24 +377,47 @@ export class StorageService {
     localStorage.setItem('neuro_folders', JSON.stringify(folders));
   }
 
-  public deleteFolder(id: string) {
+  public async deleteFolder(id: string) {
     const folders = this.getFolders().filter(f => f.id !== id);
     localStorage.setItem('neuro_folders', JSON.stringify(folders));
     
     // Move notes in this folder to root
     const notes = this.getLocalNotesMetadata();
+    const notesToUpdate: string[] = [];
     notes.forEach(n => {
-        if (n.folderId === id) n.folderId = undefined; // Root
+        if (n.folderId === id) {
+            n.folderId = undefined; // Root
+            if (n._status === 'synced' || n._status === 'cloud') {
+                notesToUpdate.push(n.id);
+            }
+        }
     });
     localStorage.setItem('neuro_notes', JSON.stringify(notes));
+
+    if (notesToUpdate.length > 0 && this.supabase) {
+        const { error } = await this.supabase
+            .from('neuro_notes')
+            .update({ folder_id: null })
+            .in('id', notesToUpdate);
+        if (error) console.error("Cloud Folder Delete Move Failed", error);
+    }
   }
 
-  public moveNoteToFolder(noteId: string, folderId: string | null) {
+  public async moveNoteToFolder(noteId: string, folderId: string | null) {
       const notes = this.getLocalNotesMetadata();
       const note = notes.find(n => n.id === noteId);
       if (note) {
           note.folderId = folderId === 'ROOT' ? undefined : (folderId || undefined);
           localStorage.setItem('neuro_notes', JSON.stringify(notes));
+
+          if ((note._status === 'synced' || note._status === 'cloud') && this.supabase) {
+              const { error } = await this.supabase
+                  .from('neuro_notes')
+                  .update({ folder_id: note.folderId || null })
+                  .eq('id', noteId);
+              
+              if (error) console.error("Cloud Move Failed", error);
+          }
       }
   }
 

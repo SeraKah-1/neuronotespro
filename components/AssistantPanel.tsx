@@ -1,6 +1,9 @@
 import React, { useState, useCallback, useEffect, useRef } from 'react';
-import { UploadCloud, Send, StickyNote, FileText, X, Loader2, Bot, User, Copy, Check, Book, Plus, Layers } from 'lucide-react';
+import { UploadCloud, Send, StickyNote, FileText, X, Loader2, Bot, User, Copy, Check, Book, Plus, Layers, Wand2, Save } from 'lucide-react';
 import ReactMarkdown from 'react-markdown';
+import remarkGfm from 'remark-gfm';
+import remarkMath from 'remark-math';
+import rehypeKatex from 'rehype-katex';
 import { HistoryItem, AIProvider, AppModel, GEMINI_MODELS_LIST, ChatMessage } from '../types';
 import { StorageService } from '../services/storageService';
 
@@ -10,9 +13,12 @@ interface AssistantPanelProps {
   onDeepenNote?: (instruction: string, files: File[], provider?: AIProvider, model?: string, contextIds?: string[]) => Promise<string>;
   isProcessing: boolean;
   groqModels?: {value: string, label: string, badge: string}[];
+  externalPrompt?: string;
+  onExternalPromptHandled?: () => void;
+  onAddSticky?: (text: string, color?: 'yellow'|'blue'|'green'|'pink') => void;
 }
 
-const AssistantPanel: React.FC<AssistantPanelProps> = ({ noteMetadata, onPromptSubmit, onDeepenNote, isProcessing, groqModels = [] }) => {
+const AssistantPanel: React.FC<AssistantPanelProps> = ({ noteMetadata, onPromptSubmit, onDeepenNote, isProcessing, groqModels = [], externalPrompt, onExternalPromptHandled, onAddSticky }) => {
   const [prompt, setPrompt] = useState('');
   const [files, setFiles] = useState<File[]>([]);
   const [provider, setProvider] = useState<AIProvider>(AIProvider.GEMINI);
@@ -22,6 +28,47 @@ const AssistantPanel: React.FC<AssistantPanelProps> = ({ noteMetadata, onPromptS
   const [availableNotes, setAvailableNotes] = useState<HistoryItem[]>([]);
   const [selectedContextIds, setSelectedContextIds] = useState<string[]>([]);
   const [showContextPicker, setShowContextPicker] = useState(false);
+
+  // Custom Prompts State
+  const [customPrompts, setCustomPrompts] = useState<string[]>([]);
+  const [showPromptPicker, setShowPromptPicker] = useState(false);
+
+  useEffect(() => {
+      const savedPrompts = localStorage.getItem('neuro_assistant_prompts');
+      if (savedPrompts) {
+          try {
+              setCustomPrompts(JSON.parse(savedPrompts));
+          } catch (e) {
+              setCustomPrompts(["Summarize this note", "Explain this concept simply", "Create a quiz from this note"]);
+          }
+      } else {
+          setCustomPrompts(["Summarize this note", "Explain this concept simply", "Create a quiz from this note"]);
+      }
+  }, []);
+
+  const saveCustomPrompt = () => {
+      if (!prompt.trim()) return;
+      if (customPrompts.includes(prompt.trim())) return;
+      const newPrompts = [...customPrompts, prompt.trim()];
+      setCustomPrompts(newPrompts);
+      localStorage.setItem('neuro_assistant_prompts', JSON.stringify(newPrompts));
+      alert("Prompt saved!");
+  };
+
+  const deleteCustomPrompt = (promptToDelete: string) => {
+      const newPrompts = customPrompts.filter(p => p !== promptToDelete);
+      setCustomPrompts(newPrompts);
+      localStorage.setItem('neuro_assistant_prompts', JSON.stringify(newPrompts));
+  };
+
+  useEffect(() => {
+      if (externalPrompt) {
+          setPrompt(externalPrompt);
+          if (onExternalPromptHandled) {
+              onExternalPromptHandled();
+          }
+      }
+  }, [externalPrompt, onExternalPromptHandled]);
 
   useEffect(() => {
       const notes = StorageService.getInstance().getLocalNotesMetadata();
@@ -184,11 +231,20 @@ const AssistantPanel: React.FC<AssistantPanelProps> = ({ noteMetadata, onPromptS
                     <div className={`p-3 rounded-2xl text-xs leading-relaxed shadow-sm relative group ${
                         msg.role === 'user' 
                         ? 'bg-[var(--ui-primary)] text-white rounded-tr-none' 
-                        : 'bg-[var(--ui-surface)] border border-[var(--ui-border)] text-[var(--ui-text-main)] rounded-tl-none'
+                        : 'bg-[var(--ui-surface)] border border-[var(--ui-border)] text-[var(--ui-text-main)] rounded-tl-none markdown-body'
                     }`}>
-                        <ReactMarkdown>{msg.content}</ReactMarkdown>
+                        <ReactMarkdown remarkPlugins={[remarkGfm, remarkMath]} rehypePlugins={[rehypeKatex]}>{msg.content}</ReactMarkdown>
                         {msg.role === 'model' && (
-                            <div className="absolute top-2 right-2 opacity-0 group-hover:opacity-100 transition-opacity">
+                            <div className="absolute top-2 right-2 opacity-0 group-hover:opacity-100 transition-opacity flex gap-1">
+                                {onAddSticky && (
+                                    <button 
+                                        onClick={() => onAddSticky(msg.content, 'yellow')}
+                                        className="p-1 bg-[var(--ui-bg)] border border-[var(--ui-border)] rounded text-[var(--ui-text-muted)] hover:text-[var(--ui-primary)] hover:bg-[var(--ui-primary)]/10 transition-colors"
+                                        title="Convert to Sticky Note"
+                                    >
+                                        <StickyNote size={12}/>
+                                    </button>
+                                )}
                                 <CopyButton text={msg.content} />
                             </div>
                         )}
@@ -264,6 +320,41 @@ const AssistantPanel: React.FC<AssistantPanelProps> = ({ noteMetadata, onPromptS
             </div>
         )}
 
+        {/* Custom Prompt Picker Modal */}
+        {showPromptPicker && (
+            <div className="absolute bottom-16 left-4 right-4 bg-[var(--ui-surface)] border border-[var(--ui-border)] shadow-xl rounded-xl p-3 max-h-60 overflow-y-auto z-50">
+                <div className="flex justify-between items-center mb-2 pb-2 border-b border-[var(--ui-border)]">
+                    <span className="text-xs font-bold">Custom Prompts</span>
+                    <button onClick={() => setShowPromptPicker(false)}><X size={14}/></button>
+                </div>
+                <div className="space-y-1 mb-2">
+                    {customPrompts.map((p, idx) => (
+                        <div key={idx} className="flex items-center justify-between group p-2 rounded text-xs hover:bg-[var(--ui-bg)]">
+                            <span 
+                                className="cursor-pointer flex-1 truncate mr-2" 
+                                onClick={() => { setPrompt(p); setShowPromptPicker(false); }}
+                            >
+                                {p}
+                            </span>
+                            <button 
+                                onClick={() => deleteCustomPrompt(p)}
+                                className="opacity-0 group-hover:opacity-100 text-red-400 hover:text-red-600 transition-opacity"
+                            >
+                                <X size={12}/>
+                            </button>
+                        </div>
+                    ))}
+                </div>
+                <button 
+                    onClick={saveCustomPrompt}
+                    disabled={!prompt.trim() || customPrompts.includes(prompt.trim())}
+                    className="w-full py-1.5 text-xs bg-[var(--ui-primary)]/10 text-[var(--ui-primary)] rounded hover:bg-[var(--ui-primary)]/20 disabled:opacity-50 transition-colors flex items-center justify-center gap-1"
+                >
+                    <Save size={12}/> Save Current Prompt
+                </button>
+            </div>
+        )}
+
         <div 
             className="flex items-center gap-2 bg-[var(--ui-bg)] border border-[var(--ui-border)] rounded-xl px-3 py-2 focus-within:ring-1 focus-within:ring-[var(--ui-primary)] transition-all"
             onDragOver={(e) => e.preventDefault()}
@@ -271,7 +362,15 @@ const AssistantPanel: React.FC<AssistantPanelProps> = ({ noteMetadata, onPromptS
             onPaste={handlePaste}
         >
             <button 
-                onClick={() => setShowContextPicker(!showContextPicker)}
+                onClick={() => { setShowPromptPicker(!showPromptPicker); setShowContextPicker(false); }}
+                className={`p-1 rounded hover:bg-[var(--ui-surface)] transition-colors ${showPromptPicker ? 'text-[var(--ui-primary)]' : 'text-[var(--ui-text-muted)]'}`}
+                title="Custom Prompts"
+            >
+                <Wand2 size={16}/>
+            </button>
+
+            <button 
+                onClick={() => { setShowContextPicker(!showContextPicker); setShowPromptPicker(false); }}
                 className={`p-1 rounded hover:bg-[var(--ui-surface)] transition-colors ${selectedContextIds.length > 0 ? 'text-indigo-500' : 'text-[var(--ui-text-muted)]'}`}
                 title="Add Context from Notes"
             >
