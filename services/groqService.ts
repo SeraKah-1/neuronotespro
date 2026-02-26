@@ -81,7 +81,10 @@ export const generateNoteContentGroq = async (
   }
 
   onProgress("Initializing Groq SDK...");
-  const modelName = config.model;
+  let modelName = config.model || 'llama-3.3-70b-versatile';
+  if (modelName.includes('gemini')) {
+      modelName = 'llama-3.3-70b-versatile';
+  }
   const groq = getGroqClient(apiKey);
 
   onProgress(`Connecting to Groq Cloud (${modelName})...`);
@@ -161,7 +164,10 @@ export const generateDetailedStructureGroq = async (
 
   const groq = getGroqClient(apiKey);
   // Use config.structureModel if available, else fallback
-  const modelName = config.structureModel || config.model || 'llama-3.3-70b-versatile';
+  let modelName = config.structureModel || config.model || 'llama-3.3-70b-versatile';
+  if (modelName.includes('gemini')) {
+      modelName = 'llama-3.3-70b-versatile';
+  }
 
   try {
     const systemPrompt = config.customStructurePrompt || UNIVERSAL_STRUCTURE_PROMPT;
@@ -203,8 +209,11 @@ export const parseSyllabusFromTextGroq = async (
   if (!apiKey) throw new Error("Groq API Key Missing");
   
   const groq = getGroqClient(apiKey);
-  // Respect the model selected in the neural engine settings
-  const modelName = config.model || 'llama-3.3-70b-versatile';
+  // Respect the model selected in the neural engine settings, but ensure it's a valid Groq model
+  let modelName = config.model || 'llama-3.3-70b-versatile';
+  if (modelName.includes('gemini')) {
+      modelName = 'llama-3.3-70b-versatile';
+  }
 
   try {
     const completion = await groq.chat.completions.create({
@@ -258,7 +267,10 @@ export const refineNoteContentGroq = async (
   if (!apiKey) throw new Error("Groq API Key Missing");
 
   const groq = getGroqClient(apiKey);
-  const modelName = config.model || 'llama-3.3-70b-versatile';
+  let modelName = config.model || 'llama-3.3-70b-versatile';
+  if (modelName.includes('gemini')) {
+      modelName = 'llama-3.3-70b-versatile';
+  }
 
   try {
     const prompt = `
@@ -304,7 +316,10 @@ export const deepenNoteContentGroq = async (
   if (!apiKey) throw new Error("Groq API Key Missing");
 
   const groq = getGroqClient(apiKey);
-  const modelName = config.model || 'llama-3.3-70b-versatile';
+  let modelName = config.model || 'llama-3.3-70b-versatile';
+  if (modelName.includes('gemini')) {
+      modelName = 'llama-3.3-70b-versatile';
+  }
 
   let contextString = "";
   if (additionalContexts && Object.keys(additionalContexts).length > 0) {
@@ -367,7 +382,10 @@ export const generateAssistantResponseGroq = async (
   if (!apiKey) throw new Error("Groq API Key Missing");
 
   const groq = getGroqClient(apiKey);
-  const modelName = config.model || 'llama-3.3-70b-versatile';
+  let modelName = config.model || 'llama-3.3-70b-versatile';
+  if (modelName.includes('gemini')) {
+      modelName = 'llama-3.3-70b-versatile';
+  }
 
   let contextString = "";
   if (additionalContexts && Object.keys(additionalContexts).length > 0) {

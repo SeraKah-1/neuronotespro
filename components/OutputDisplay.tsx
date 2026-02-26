@@ -11,6 +11,7 @@ import { refineNoteContent, generateAssistantResponse, deepenNoteContent } from 
 import { refineNoteContentGroq, generateAssistantResponseGroq, deepenNoteContentGroq } from '../services/groqService';
 import Mermaid from './Mermaid';
 import AssistantPanel from './AssistantPanel';
+import { renderCalloutBlockquote, SlashCommandEditor } from './SmartEditor';
 import { AppTheme, AIProvider, GenerationConfig, UploadedFile, GEMINI_MODELS_LIST, AppModel, ChatMessage, StickyNote as StickyNoteType } from '../types';
 
 // Helper for file conversion
@@ -683,7 +684,12 @@ const OutputDisplay: React.FC<OutputDisplayProps> = ({ content, topic, onUpdateC
     h1: ({ children }: any) => <h1 id={getHeaderId(String(children), 1)}>{children}</h1>,
     h2: ({ children }: any) => <h2 id={getHeaderId(String(children), 2)}>{children}</h2>,
     h3: ({ children }: any) => <h3 id={getHeaderId(String(children), 3)}>{children}</h3>,
-    code: CodeBlock
+    code: CodeBlock,
+    blockquote: ({ node, children, ...props }: any) => {
+      const callout = renderCalloutBlockquote(children);
+      if (callout) return callout;
+      return <blockquote {...props}>{children}</blockquote>;
+    }
   }), [getHeaderId, CodeBlock]);
 
   return (
@@ -930,7 +936,7 @@ const OutputDisplay: React.FC<OutputDisplayProps> = ({ content, topic, onUpdateC
 
              {activeTab === 'code' && (
                  <div className="min-h-full p-4 md:p-6 pb-32">
-                    <textarea 
+                    <SlashCommandEditor 
                         value={editableContent}
                         onChange={(e) => { setEditableContent(e.target.value); setIsDirty(true); }}
                         onBlur={() => pushToHistory(editableContent)}

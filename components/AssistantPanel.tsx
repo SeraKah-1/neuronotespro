@@ -1,5 +1,5 @@
 import React, { useState, useCallback, useEffect, useRef } from 'react';
-import { UploadCloud, Send, StickyNote, FileText, X, Loader2, Bot, User, Copy, Check, Book, Plus, Layers, Wand2, Save } from 'lucide-react';
+import { UploadCloud, Send, StickyNote, FileText, X, Loader2, Bot, User, Copy, Check, Book, Plus, Layers, Wand2, Save, Settings2 } from 'lucide-react';
 import ReactMarkdown from 'react-markdown';
 import remarkGfm from 'remark-gfm';
 import remarkMath from 'remark-math';
@@ -9,7 +9,7 @@ import { StorageService } from '../services/storageService';
 
 interface AssistantPanelProps {
   noteMetadata?: HistoryItem['metadata'];
-  onPromptSubmit: (history: ChatMessage[], files: File[], provider?: AIProvider, model?: string, contextIds?: string[]) => Promise<string>;
+  onPromptSubmit: (history: ChatMessage[], files: File[], provider?: AIProvider, model?: string, contextIds?: string[], personality?: string) => Promise<string>;
   onDeepenNote?: (instruction: string, files: File[], provider?: AIProvider, model?: string, contextIds?: string[]) => Promise<string>;
   isProcessing: boolean;
   groqModels?: {value: string, label: string, badge: string}[];
@@ -32,6 +32,10 @@ const AssistantPanel: React.FC<AssistantPanelProps> = ({ noteMetadata, onPromptS
   // Custom Prompts State
   const [customPrompts, setCustomPrompts] = useState<string[]>([]);
   const [showPromptPicker, setShowPromptPicker] = useState(false);
+
+  // Personality State
+  const [personality, setPersonality] = useState('');
+  const [showPersonalitySettings, setShowPersonalitySettings] = useState(false);
 
   useEffect(() => {
       const savedPrompts = localStorage.getItem('neuro_assistant_prompts');
@@ -134,7 +138,7 @@ const AssistantPanel: React.FC<AssistantPanelProps> = ({ noteMetadata, onPromptS
     setFiles([]); 
 
     try {
-        const response = await onPromptSubmit(newHistory, files, provider, model, selectedContextIds);
+        const response = await onPromptSubmit(newHistory, files, provider, model, selectedContextIds, personality);
         setMessages(prev => [...prev, { role: 'model', content: response }]);
     } catch (e) {
         setMessages(prev => [...prev, { role: 'model', content: "Sorry, I encountered an error." }]);
@@ -178,11 +182,42 @@ const AssistantPanel: React.FC<AssistantPanelProps> = ({ noteMetadata, onPromptS
   return (
     <div className="h-full flex flex-col bg-[var(--ui-surface)] border-l border-[var(--ui-border)]">
       {/* HEADER */}
-      <div className="p-4 border-b border-[var(--ui-border)] font-bold text-[var(--ui-text-main)] flex flex-col gap-2">
-        <div className="flex items-center gap-2">
-            <div className="w-2 h-2 rounded-full bg-emerald-500 animate-pulse"></div>
-            AI Assistant
+      <div className="p-4 border-b border-[var(--ui-border)] font-bold text-[var(--ui-text-main)] flex flex-col gap-2 relative">
+        <div className="flex items-center justify-between">
+            <div className="flex items-center gap-2">
+                <div className="w-2 h-2 rounded-full bg-emerald-500 animate-pulse"></div>
+                AI Assistant
+            </div>
+            <button 
+                onClick={() => setShowPersonalitySettings(!showPersonalitySettings)}
+                className={`p-1 rounded transition-colors ${showPersonalitySettings ? 'bg-[var(--ui-primary)]/10 text-[var(--ui-primary)]' : 'text-[var(--ui-text-muted)] hover:bg-[var(--ui-bg)] hover:text-[var(--ui-text-main)]'}`}
+                title="AI Personality Settings"
+            >
+                <Settings2 size={16}/>
+            </button>
         </div>
+
+        {/* Personality Settings Dropdown */}
+        {showPersonalitySettings && (
+            <div className="absolute top-full left-0 right-0 mt-1 bg-[var(--ui-surface)] border border-[var(--ui-border)] shadow-xl rounded-xl p-3 z-50 animate-scale-in">
+                <div className="flex justify-between items-center mb-2 pb-2 border-b border-[var(--ui-border)]">
+                    <span className="text-xs font-bold">AI Personality (System Prompt)</span>
+                    <button onClick={() => setShowPersonalitySettings(false)} className="text-[var(--ui-text-muted)] hover:text-[var(--ui-text-main)]"><X size={14}/></button>
+                </div>
+                <textarea 
+                    value={personality}
+                    onChange={(e) => setPersonality(e.target.value)}
+                    placeholder="e.g., You are a strict medical professor. Always answer in bullet points..."
+                    className="w-full h-24 bg-[var(--ui-bg)] text-[var(--ui-text-main)] text-xs p-2 rounded outline-none border border-[var(--ui-border)] resize-none mb-2"
+                />
+                <button 
+                    onClick={savePersonality}
+                    className="w-full py-1.5 text-xs bg-[var(--ui-primary)] text-white rounded hover:opacity-90 transition-opacity"
+                >
+                    Save Personality
+                </button>
+            </div>
+        )}
         
         {/* MODEL SELECTOR */}
         <div className="flex gap-1 w-full">
