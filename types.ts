@@ -117,6 +117,8 @@ export interface StickyNote {
   text: string;
   color: 'yellow' | 'blue' | 'green' | 'pink';
   timestamp: number;
+  isEditing?: boolean;
+  isCollapsed?: boolean;
 }
 
 export interface HistoryItem {

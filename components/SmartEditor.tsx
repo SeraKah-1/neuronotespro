@@ -108,11 +108,11 @@ export const SlashCommandEditor: React.FC<SlashCommandEditorProps> = ({ classNam
   const mirrorRef = useRef<HTMLDivElement>(null);
 
   const commands = [
-    { id: 'note', label: 'Note', icon: <Lightbulb size={14} className="text-yellow-500" />, text: '> [!note]\n> ' },
-    { id: 'warning', label: 'Warning', icon: <AlertTriangle size={14} className="text-orange-500" />, text: '> [!warning]\n> ' },
-    { id: 'danger', label: 'Danger', icon: <AlertTriangle size={14} className="text-red-500" />, text: '> [!danger]\n> ' },
-    { id: 'info', label: 'Info', icon: <Info size={14} className="text-blue-500" />, text: '> [!info]\n> ' },
-    { id: 'success', label: 'Success', icon: <CheckCircle size={14} className="text-green-500" />, text: '> [!success]\n> ' },
+    { id: 'note', label: 'Note', icon: <Lightbulb size={14} className="text-yellow-500" />, text: '> [!note]\n\n<' },
+    { id: 'warning', label: 'Warning', icon: <AlertTriangle size={14} className="text-orange-500" />, text: '> [!warning]\n\n<' },
+    { id: 'danger', label: 'Danger', icon: <AlertTriangle size={14} className="text-red-500" />, text: '> [!danger]\n\n<' },
+    { id: 'info', label: 'Info', icon: <Info size={14} className="text-blue-500" />, text: '> [!info]\n\n<' },
+    { id: 'success', label: 'Success', icon: <CheckCircle size={14} className="text-green-500" />, text: '> [!success]\n\n<' },
   ];
 
   const filteredCommands = commands.filter(c => c.label.toLowerCase().includes(filter.toLowerCase()));
@@ -153,58 +153,6 @@ export const SlashCommandEditor: React.FC<SlashCommandEditorProps> = ({ classNam
       } else if (e.key === 'Escape') {
         setShowMenu(false);
         return;
-      }
-    } else if (e.key === 'Enter' && !e.shiftKey) {
-      // Auto-continue blockquote (>) on Enter
-      const ta = textareaRef.current;
-      if (ta) {
-        const cursorPosition = ta.selectionStart;
-        const currentValue = String(value || ta.value);
-        const valueBeforeCursor = currentValue.slice(0, cursorPosition);
-        const lines = valueBeforeCursor.split('\n');
-        const currentLine = lines[lines.length - 1];
-        
-        // Cek apakah baris saat ini hanya berisi "> " (kosong)
-        const emptyBlockquoteMatch = currentLine.match(/^(\s*>\s*)$/);
-        if (emptyBlockquoteMatch) {
-          e.preventDefault();
-          // Hapus "> " dan ganti dengan baris baru biasa (break out dari blockquote)
-          const textAfterCursor = currentValue.slice(cursorPosition);
-          const newValue = valueBeforeCursor.slice(0, -currentLine.length) + '\n' + textAfterCursor;
-          
-          if (onChange) {
-            const event = { target: { value: newValue } } as React.ChangeEvent<HTMLTextAreaElement>;
-            onChange(event);
-          }
-          
-          setTimeout(() => {
-            ta.focus();
-            const newPos = cursorPosition - currentLine.length + 1;
-            ta.setSelectionRange(newPos, newPos);
-          }, 0);
-          return;
-        }
-        
-        // Cek apakah baris saat ini diawali dengan "> "
-        const blockquoteMatch = currentLine.match(/^(\s*>\s*)/);
-        if (blockquoteMatch) {
-          e.preventDefault();
-          const prefix = blockquoteMatch[1];
-          const textAfterCursor = currentValue.slice(cursorPosition);
-          const newValue = valueBeforeCursor + '\n' + prefix + textAfterCursor;
-          
-          if (onChange) {
-            const event = { target: { value: newValue } } as React.ChangeEvent<HTMLTextAreaElement>;
-            onChange(event);
-          }
-          
-          setTimeout(() => {
-            ta.focus();
-            const newPos = cursorPosition + 1 + prefix.length;
-            ta.setSelectionRange(newPos, newPos);
-          }, 0);
-          return;
-        }
       }
     }
     

@@ -115,6 +115,7 @@ const Mermaid: React.FC<MermaidProps> = ({ chart, onChartChange }) => {
     const url = URL.createObjectURL(svgBlob);
     
     const img = new Image();
+    img.crossOrigin = "anonymous";
     img.onload = function() {
         const canvas = document.createElement("canvas");
         const bbox = svgElement.getBBox();

@@ -102,7 +102,8 @@ export const generateNoteContentGroq = async (
         2. DO NOT SUMMARIZE. Provide the most exhaustive, detailed explanation possible.
         3. IGNORE OUTPUT LENGTH LIMITS. Explain every concept fully.
         4. If a list has 20 items, list all 20. Do not truncate.
-        5. **MERMAID SYNTAX RULES:**
+        5. **NO HTML TAGS:** Do NOT use <br>, <div>, <span>, or any HTML. Use standard Markdown for line breaks and formatting.
+        6. **MERMAID SYNTAX RULES:**
            - ARROWS: Use "-->" (no spaces). NEVER "- ->".
            - HEADER: Always newline after "flowchart TD". NEVER "flowchart TDA[...]".
            - NODES: Use A["Label"]. Do NOT repeat ID like A["Label"]A.
@@ -345,9 +346,9 @@ export const deepenNoteContentGroq = async (
 
   ORIGINAL CONTENT:
   """
-  ${currentContent}
+  ${currentContent.substring(0, 15000)}
   """
-  ${contextString}
+  ${contextString.substring(0, 10000)}
   `;
 
   try {

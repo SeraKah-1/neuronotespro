@@ -4,7 +4,7 @@ import ReactMarkdown from 'react-markdown';
 import remarkGfm from 'remark-gfm';
 import remarkMath from 'remark-math';
 import rehypeKatex from 'rehype-katex';
-import { Download, Copy, Eye, Check, List, Book, Focus, Save, Edit3, CloudUpload, Clipboard, ClipboardCheck, EyeOff, MousePointerClick, BookOpen, Microscope, Activity, AlertTriangle, Info, Wand2, Search, X, HelpCircle, MessageSquareQuote, LayoutTemplate, Undo2, Redo2, Loader2, Workflow, Printer, FileDown, Maximize2, Minimize2, UploadCloud, ArrowLeft, StickyNote, Bot, Plus } from 'lucide-react';
+import { Download, Copy, Eye, Check, List, Book, Focus, Save, Edit3, CloudUpload, Clipboard, ClipboardCheck, EyeOff, MousePointerClick, BookOpen, Microscope, Activity, AlertTriangle, Info, Wand2, Search, X, HelpCircle, MessageSquareQuote, LayoutTemplate, Undo2, Redo2, Loader2, Workflow, Printer, FileDown, Maximize2, Minimize2, UploadCloud, ArrowLeft, StickyNote, Bot, Plus, ChevronUp, ChevronDown } from 'lucide-react';
 import { StorageService } from '../services/storageService';
 import { processGeneratedNote } from '../utils/formatter';
 import { refineNoteContent, generateAssistantResponse, deepenNoteContent } from '../services/geminiService';
@@ -25,6 +25,28 @@ const fileToBase64 = (file: File): Promise<string> => {
       resolve(base64);
     };
     reader.onerror = error => reject(error);
+  });
+};
+
+// Preprocess Markdown to handle custom Callout syntax (> [!type] ... <)
+const preprocessMarkdown = (text: string) => {
+  // Pattern:
+  // ^> \[!(.*)\] matches the start: > [!note] Title
+  // ([\s\S]*?) matches the body non-greedily
+  // ^<$ matches the end tag on a new line
+  const regex = /(^> \[![\w]+\][^\n]*\n)([\s\S]*?)(^<$)/gm;
+
+  return text.replace(regex, (match, header, body, footer) => {
+    // header: "> [!note] Title\n"
+    // body: "Line 1\nLine 2\n"
+    // footer: "<"
+
+    const indentedBody = body.split('\n').map((line: string) => {
+        if (line.trim() === '') return '>'; // Empty line becomes >
+        return `> ${line}`;
+    }).join('\n');
+
+    return `${header}${indentedBody}`;
   });
 };
 
@@ -928,7 +950,7 @@ const OutputDisplay: React.FC<OutputDisplayProps> = ({ content, topic, onUpdateC
                       id="markdown-content"
                     >
                        <ReactMarkdown remarkPlugins={[remarkGfm, remarkMath]} rehypePlugins={[rehypeKatex]} components={components}>
-                          {debouncedContent}
+                          {preprocessMarkdown(debouncedContent)}
                        </ReactMarkdown>
                     </div>
                  </div>
@@ -1042,24 +1064,66 @@ const OutputDisplay: React.FC<OutputDisplayProps> = ({ content, topic, onUpdateC
                                       {/* Folded corner effect */}
                                       <div className="absolute bottom-0 right-0 w-3 h-3 bg-black/5 rounded-tl-sm pointer-events-none"></div>
                                       
-                                      <textarea 
-                                          autoFocus={index === 0 && sticky.text === ""}
-                                          value={sticky.text}
-                                          placeholder="Type your note here..."
-                                          onChange={(e) => {
-                                              const newStickies = stickies.map(s => s.id === sticky.id ? { ...s, text: e.target.value } : s);
-                                              setStickies(newStickies);
-                                              e.target.style.height = 'auto';
-                                              e.target.style.height = e.target.scrollHeight + 'px';
-                                          }}
-                                          onFocus={(e) => {
-                                              e.target.style.height = 'auto';
-                                              e.target.style.height = e.target.scrollHeight + 'px';
-                                          }}
-                                          onBlur={() => saveStickiesToMetadata(stickies)}
-                                          className="w-full bg-transparent outline-none resize-none text-xs font-medium min-h-[60px] overflow-hidden placeholder:text-black/30"
-                                      />
-                                      <div className="absolute top-2 right-2 opacity-0 group-hover:opacity-100 transition-opacity flex gap-1">
+                                      {sticky.isCollapsed ? (
+                                          <div 
+                                              onClick={() => {
+                                                  const newStickies = stickies.map(s => s.id === sticky.id ? { ...s, isCollapsed: false } : s);
+                                                  setStickies(newStickies);
+                                                  saveStickiesToMetadata(newStickies);
+                                              }}
+                                              className="w-full text-xs font-medium cursor-pointer truncate pr-16 opacity-70"
+                                          >
+                                              {sticky.text ? sticky.text.split('\n')[0] : "Empty note..."}
+                                          </div>
+                                      ) : (
+                                          <>
+                                              {/* CLICK-TO-EDIT INTERFACE */}
+                                              {sticky.isEditing ? (
+                                                  <textarea 
+                                                      autoFocus
+                                                      value={sticky.text}
+                                                      placeholder="Type your note here..."
+                                                      onChange={(e) => {
+                                                          const newStickies = stickies.map(s => s.id === sticky.id ? { ...s, text: e.target.value } : s);
+                                                          setStickies(newStickies);
+                                                          e.target.style.height = 'auto';
+                                                          e.target.style.height = e.target.scrollHeight + 'px';
+                                                      }}
+                                                      onBlur={() => {
+                                                          const newStickies = stickies.map(s => s.id === sticky.id ? { ...s, isEditing: false } : s);
+                                                          setStickies(newStickies);
+                                                          saveStickiesToMetadata(newStickies);
+                                                      }}
+                                                      className="w-full bg-transparent outline-none resize-none text-xs font-medium min-h-[60px] overflow-hidden placeholder:text-black/30"
+                                                  />
+                                              ) : (
+                                                  <div 
+                                                      onClick={() => {
+                                                          const newStickies = stickies.map(s => s.id === sticky.id ? { ...s, isEditing: true } : s);
+                                                          setStickies(newStickies);
+                                                      }}
+                                                      className="w-full min-h-[60px] text-xs font-medium cursor-text markdown-body sticky-markdown"
+                                                  >
+                                                      <ReactMarkdown remarkPlugins={[remarkGfm, remarkMath]} rehypePlugins={[rehypeKatex]}>
+                                                          {sticky.text || "Empty note. Click to edit."}
+                                                      </ReactMarkdown>
+                                                  </div>
+                                              )}
+                                          </>
+                                      )}
+
+                                      <div className="absolute top-2 right-2 opacity-0 group-hover:opacity-100 transition-opacity flex gap-1 bg-white/30 backdrop-blur-sm rounded px-0.5">
+                                          <button 
+                                              onClick={() => {
+                                                  const newStickies = stickies.map(s => s.id === sticky.id ? { ...s, isCollapsed: !s.isCollapsed } : s);
+                                                  setStickies(newStickies);
+                                                  saveStickiesToMetadata(newStickies);
+                                              }} 
+                                              className="text-[var(--ui-text-muted)] hover:text-indigo-600 p-0.5"
+                                              title={sticky.isCollapsed ? "Expand" : "Collapse"}
+                                          >
+                                              {sticky.isCollapsed ? <ChevronDown size={12}/> : <ChevronUp size={12}/>}
+                                          </button>
                                           <button 
                                               onClick={() => {
                                                   setExternalPrompt(`Explain this note: "${sticky.text}"`);
@@ -1072,23 +1136,26 @@ const OutputDisplay: React.FC<OutputDisplayProps> = ({ content, topic, onUpdateC
                                           </button>
                                           <button onClick={() => deleteSticky(sticky.id)} className="text-red-400 hover:text-red-600 p-0.5"><X size={12}/></button>
                                       </div>
-                                      <div className="flex gap-1 mt-2 opacity-50 group-hover:opacity-100 transition-opacity">
-                                          {['yellow', 'blue', 'green', 'pink'].map(c => (
-                                              <button 
-                                                  key={c}
-                                                  onClick={() => {
-                                                      const newStickies = stickies.map(s => s.id === sticky.id ? { ...s, color: c as any } : s);
-                                                      setStickies(newStickies);
-                                                      saveStickiesToMetadata(newStickies);
-                                                  }}
-                                                  className={`w-3 h-3 rounded-full border border-black/10 ${
-                                                      c === 'yellow' ? 'bg-yellow-300' :
-                                                      c === 'blue' ? 'bg-blue-300' :
-                                                      c === 'green' ? 'bg-green-300' : 'bg-pink-300'
-                                                  }`}
-                                              />
-                                          ))}
-                                      </div>
+                                      
+                                      {!sticky.isCollapsed && (
+                                          <div className="flex gap-1 mt-2 opacity-50 group-hover:opacity-100 transition-opacity">
+                                              {['yellow', 'blue', 'green', 'pink'].map(c => (
+                                                  <button 
+                                                      key={c}
+                                                      onClick={() => {
+                                                          const newStickies = stickies.map(s => s.id === sticky.id ? { ...s, color: c as any } : s);
+                                                          setStickies(newStickies);
+                                                          saveStickiesToMetadata(newStickies);
+                                                      }}
+                                                      className={`w-3 h-3 rounded-full border border-black/10 ${
+                                                          c === 'yellow' ? 'bg-yellow-300' :
+                                                          c === 'blue' ? 'bg-blue-300' :
+                                                          c === 'green' ? 'bg-green-300' : 'bg-pink-300'
+                                                      }`}
+                                                  />
+                                              ))}
+                                          </div>
+                                      )}
                                   </div>
                               ))}
                           </div>

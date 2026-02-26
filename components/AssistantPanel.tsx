@@ -65,6 +65,10 @@ const AssistantPanel: React.FC<AssistantPanelProps> = ({ noteMetadata, onPromptS
       localStorage.setItem('neuro_assistant_prompts', JSON.stringify(newPrompts));
   };
 
+  const savePersonality = () => {
+      setShowPersonalitySettings(false);
+  };
+
   useEffect(() => {
       if (externalPrompt) {
           setPrompt(externalPrompt);
@@ -179,6 +183,12 @@ const AssistantPanel: React.FC<AssistantPanelProps> = ({ noteMetadata, onPromptS
       );
   };
 
+  const cleanResponse = (text: string) => {
+    if (!text) return "";
+    // Replace <br> tags with newlines
+    return text.replace(/<br\s*\/?>/gi, '\n');
+  };
+
   return (
     <div className="h-full flex flex-col bg-[var(--ui-surface)] border-l border-[var(--ui-border)]">
       {/* HEADER */}
@@ -268,7 +278,7 @@ const AssistantPanel: React.FC<AssistantPanelProps> = ({ noteMetadata, onPromptS
                         ? 'bg-[var(--ui-primary)] text-white rounded-tr-none' 
                         : 'bg-[var(--ui-surface)] border border-[var(--ui-border)] text-[var(--ui-text-main)] rounded-tl-none markdown-body'
                     }`}>
-                        <ReactMarkdown remarkPlugins={[remarkGfm, remarkMath]} rehypePlugins={[rehypeKatex]}>{msg.content}</ReactMarkdown>
+                        <ReactMarkdown remarkPlugins={[remarkGfm, remarkMath]} rehypePlugins={[rehypeKatex]}>{cleanResponse(msg.content)}</ReactMarkdown>
                         {msg.role === 'model' && (
                             <div className="absolute top-2 right-2 opacity-0 group-hover:opacity-100 transition-opacity flex gap-1">
                                 {onAddSticky && (
