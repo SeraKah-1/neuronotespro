@@ -4,7 +4,7 @@ import ReactMarkdown from 'react-markdown';
 import remarkGfm from 'remark-gfm';
 import remarkMath from 'remark-math';
 import rehypeKatex from 'rehype-katex';
-import { Download, Copy, Eye, Check, List, Book, Focus, Save, Edit3, CloudUpload, Clipboard, ClipboardCheck, EyeOff, MousePointerClick, BookOpen, Microscope, Activity, AlertTriangle, Info, Wand2, Search, X, HelpCircle, MessageSquareQuote, LayoutTemplate, Undo2, Redo2, Loader2, Workflow, Printer, FileDown, Maximize2, Minimize2, UploadCloud, ArrowLeft, StickyNote, Bot, Plus, ChevronUp, ChevronDown } from 'lucide-react';
+import { Download, Copy, Eye, Check, List, Book, Focus, Save, Edit3, CloudUpload, Clipboard, ClipboardCheck, EyeOff, MousePointerClick, BookOpen, Microscope, Activity, AlertTriangle, Info, Wand2, Search, X, HelpCircle, MessageSquareQuote, LayoutTemplate, Undo2, Redo2, Loader2, Workflow, Printer, FileDown, Maximize2, Minimize2, UploadCloud, ArrowLeft, StickyNote, Bot, Plus, ChevronUp, ChevronDown, Pin, PinOff, GripHorizontal } from 'lucide-react';
 import { StorageService } from '../services/storageService';
 import { processGeneratedNote } from '../utils/formatter';
 import { refineNoteContent, generateAssistantResponse, deepenNoteContent } from '../services/geminiService';
@@ -173,6 +173,10 @@ const OutputDisplay: React.FC<OutputDisplayProps> = ({ content, topic, onUpdateC
   const [rightPanelTab, setRightPanelTab] = useState<'assistant' | 'stickies'>('assistant');
   const [isRightPanelOpen, setIsRightPanelOpen] = useState(true);
   const stickiesContainerRef = useRef<HTMLDivElement>(null);
+  
+  // Drag state for floating stickies
+  const [draggingId, setDraggingId] = useState<string | null>(null);
+  const [dragOffset, setDragOffset] = useState({ x: 0, y: 0 });
 
   useEffect(() => {
       isMounted.current = true;
@@ -220,6 +224,213 @@ const OutputDisplay: React.FC<OutputDisplayProps> = ({ content, topic, onUpdateC
           const fullNote = { ...notes[noteIndex], content, metadata: updatedMetadata };
           await storage.saveNoteLocal(fullNote);
       }
+  };
+
+  const handleDragStart = (e: React.PointerEvent, id: string) => {
+      if ((e.target as HTMLElement).closest('button')) return;
+      const el = (e.currentTarget as HTMLElement).closest('.floating-sticky');
+      if (!el) return;
+      const rect = el.getBoundingClientRect();
+      setDragOffset({
+          x: e.clientX - rect.left,
+          y: e.clientY - rect.top
+      });
+      setDraggingId(id);
+      (e.currentTarget as HTMLElement).setPointerCapture(e.pointerId);
+  };
+
+  const handleDragMove = (e: React.PointerEvent) => {
+      if (!draggingId) return;
+      const newStickies = stickies.map(s => 
+          s.id === draggingId 
+              ? { ...s, position: { x: e.clientX - dragOffset.x, y: e.clientY - dragOffset.y } } 
+              : s
+      );
+      setStickies(newStickies);
+  };
+
+  const handleDragEnd = (e: React.PointerEvent) => {
+      if (draggingId) {
+          saveStickiesToMetadata(stickies);
+          setDraggingId(null);
+          (e.currentTarget as HTMLElement).releasePointerCapture(e.pointerId);
+      }
+  };
+
+  const renderSticky = (sticky: StickyNoteType, isFloatingMode: boolean) => {
+      const dateStr = new Date(sticky.timestamp).toLocaleDateString(undefined, { month: 'short', day: 'numeric', hour: '2-digit', minute: '2-digit' });
+      
+      const bgColor = 
+          sticky.color === 'yellow' ? 'bg-yellow-500/10 text-[var(--ui-text-main)]' :
+          sticky.color === 'blue' ? 'bg-blue-500/10 text-[var(--ui-text-main)]' :
+          sticky.color === 'green' ? 'bg-green-500/10 text-[var(--ui-text-main)]' :
+          'bg-pink-500/10 text-[var(--ui-text-main)]';
+
+      return (
+          <div 
+              key={sticky.id} 
+              className={`relative group p-4 rounded-xl ${draggingId === sticky.id ? '' : 'transition-all'} ${bgColor} ${isFloatingMode ? 'shadow-2xl floating-sticky absolute w-[300px] z-50 backdrop-blur-sm border border-white/20' : 'mb-3'}`}
+              style={isFloatingMode ? { left: sticky.position?.x || 100, top: sticky.position?.y || 100 } : {}}
+          >
+              {/* HEADER - Action buttons only visible on hover */}
+              <div className={`flex justify-between items-center mb-2 transition-opacity ${isFloatingMode ? 'cursor-move' : ''}`}
+                   onPointerDown={isFloatingMode ? (e) => handleDragStart(e, sticky.id) : undefined}
+                   onPointerMove={isFloatingMode ? handleDragMove : undefined}
+                   onPointerUp={isFloatingMode ? handleDragEnd : undefined}
+              >
+                  <span className="text-[10px] opacity-50 font-medium flex items-center gap-1">
+                      {isFloatingMode && <GripHorizontal size={10} />}
+                      {dateStr}
+                  </span>
+                  <div className="flex items-center gap-1.5 opacity-0 group-hover:opacity-100 transition-opacity">
+                      {/* Color Picker */}
+                      <div className="flex gap-1 mr-2">
+                          {['yellow', 'blue', 'green', 'pink'].map(c => (
+                              <button 
+                                  key={c}
+                                  onClick={() => {
+                                      const newStickies = stickies.map(s => s.id === sticky.id ? { ...s, color: c as any } : s);
+                                      setStickies(newStickies);
+                                      saveStickiesToMetadata(newStickies);
+                                  }}
+                                  className={`w-2.5 h-2.5 rounded-full ${
+                                      c === 'yellow' ? 'bg-yellow-400' :
+                                      c === 'blue' ? 'bg-blue-400' :
+                                      c === 'green' ? 'bg-green-400' : 'bg-pink-400'
+                                  } ${sticky.color === c ? 'ring-1 ring-offset-1 ring-black/30' : 'opacity-50 hover:opacity-100'}`}
+                                  title={`Change color to ${c}`}
+                              />
+                          ))}
+                      </div>
+                      <button 
+                          onClick={() => {
+                              const newStickies = stickies.map(s => s.id === sticky.id ? { ...s, isFloating: !s.isFloating, position: s.isFloating ? undefined : { x: 50, y: 50 } } : s);
+                              setStickies(newStickies);
+                              saveStickiesToMetadata(newStickies);
+                          }} 
+                          className="hover:text-black transition-colors"
+                          title={isFloatingMode ? "Pin to Sidebar" : "Detach (Float)"}
+                      >
+                          {isFloatingMode ? <PinOff size={12}/> : <Pin size={12}/>}
+                      </button>
+                      <button 
+                          onClick={() => {
+                              setExternalPrompt(`Explain this note: "${sticky.text}"`);
+                              setRightPanelTab('assistant');
+                              if (!isRightPanelOpen) setIsRightPanelOpen(true);
+                          }} 
+                          className="hover:text-indigo-500 transition-colors"
+                          title="Ask AI about this"
+                      >
+                          <Bot size={12}/>
+                      </button>
+                      <button onClick={() => {
+                          const newStickies = stickies.filter(s => s.id !== sticky.id);
+                          setStickies(newStickies);
+                          saveStickiesToMetadata(newStickies);
+                      }} className="hover:text-red-500 transition-colors" title="Delete"><X size={12}/></button>
+                      {!isFloatingMode && (
+                          <button 
+                              onClick={() => {
+                                  const newStickies = stickies.map(s => s.id === sticky.id ? { ...s, isCollapsed: !s.isCollapsed } : s);
+                                  setStickies(newStickies);
+                                  saveStickiesToMetadata(newStickies);
+                              }} 
+                              className="hover:text-black transition-colors ml-1"
+                              title={sticky.isCollapsed ? "Expand" : "Collapse"}
+                          >
+                              {sticky.isCollapsed ? <ChevronDown size={14}/> : <ChevronUp size={14}/>}
+                          </button>
+                      )}
+                  </div>
+              </div>
+
+              {/* CONTENT */}
+              <div className="relative">
+                  {sticky.isCollapsed && !isFloatingMode ? (
+                      <div 
+                          onClick={() => {
+                              const newStickies = stickies.map(s => s.id === sticky.id ? { ...s, isCollapsed: false } : s);
+                              setStickies(newStickies);
+                              saveStickiesToMetadata(newStickies);
+                          }}
+                          className="text-xs font-semibold cursor-pointer truncate opacity-80"
+                      >
+                          {sticky.text ? sticky.text.split('\n')[0].replace(/^[#*-\s]+/, '') : "Empty note..."}
+                      </div>
+                  ) : (
+                      <>
+                          {sticky.isEditing ? (
+                              <textarea 
+                                  autoFocus
+                                  value={sticky.text}
+                                  placeholder="Type your note here..."
+                                  onChange={(e) => {
+                                      const newStickies = stickies.map(s => s.id === sticky.id ? { ...s, text: e.target.value } : s);
+                                      setStickies(newStickies);
+                                      e.target.style.height = 'auto';
+                                      e.target.style.height = e.target.scrollHeight + 'px';
+                                  }}
+                                  onBlur={() => {
+                                      const newStickies = stickies.map(s => s.id === sticky.id ? { ...s, isEditing: false } : s);
+                                      setStickies(newStickies);
+                                      saveStickiesToMetadata(newStickies);
+                                  }}
+                                  className="w-full bg-transparent outline-none resize-none text-xs font-medium min-h-[60px] overflow-hidden placeholder:text-black/30"
+                              />
+                          ) : (
+                              <div className="relative group/content">
+                                  <div 
+                                      onClick={() => {
+                                          const newStickies = stickies.map(s => s.id === sticky.id ? { ...s, isEditing: true } : s);
+                                          setStickies(newStickies);
+                                      }}
+                                      className={`w-full text-xs font-medium cursor-text markdown-body sticky-markdown ${!sticky.isExpandedFull && !isFloatingMode ? 'max-h-[120px] overflow-hidden' : ''}`}
+                                  >
+                                      <ReactMarkdown remarkPlugins={[remarkGfm, remarkMath]} rehypePlugins={[rehypeKatex]}>
+                                          {sticky.text || "Empty note. Click to edit."}
+                                      </ReactMarkdown>
+                                  </div>
+                                  
+                                  {/* Fade out effect & Show More button if not expanded full */}
+                                  {!sticky.isExpandedFull && !isFloatingMode && sticky.text.length > 150 && (
+                                      <>
+                                          <div className={`absolute bottom-0 left-0 right-0 h-12 bg-gradient-to-t from-${sticky.color}-500/10 to-transparent pointer-events-none`}></div>
+                                          <button 
+                                              onClick={(e) => {
+                                                  e.stopPropagation();
+                                                  const newStickies = stickies.map(s => s.id === sticky.id ? { ...s, isExpandedFull: true } : s);
+                                                  setStickies(newStickies);
+                                                  saveStickiesToMetadata(newStickies);
+                                              }}
+                                              className="absolute -bottom-2 left-1/2 -translate-x-1/2 bg-white/50 backdrop-blur-sm border border-black/10 text-[10px] px-2 py-0.5 rounded-full text-black/60 hover:text-black shadow-sm opacity-0 group-hover/content:opacity-100 transition-opacity"
+                                          >
+                                              Show more
+                                          </button>
+                                      </>
+                                  )}
+
+                                  {/* Show Less button if expanded full */}
+                                  {sticky.isExpandedFull && !isFloatingMode && (
+                                      <button 
+                                          onClick={(e) => {
+                                              e.stopPropagation();
+                                              const newStickies = stickies.map(s => s.id === sticky.id ? { ...s, isExpandedFull: false } : s);
+                                              setStickies(newStickies);
+                                              saveStickiesToMetadata(newStickies);
+                                          }}
+                                          className="mt-2 text-[10px] text-black/50 hover:text-black transition-colors w-full text-center"
+                                      >
+                                          Show less
+                                      </button>
+                                  )}
+                              </div>
+                          )}
+                      </>
+                  )}
+              </div>
+          </div>
+      );
   };
 
   const [selectionMenu, setSelectionMenu] = useState<{x: number, y: number, text: string} | null>(null);
@@ -1051,113 +1262,7 @@ const OutputDisplay: React.FC<OutputDisplayProps> = ({ content, topic, onUpdateC
                                   </div>
                               )}
 
-                              {stickies.map((sticky, index) => (
-                                  <div 
-                                      key={sticky.id} 
-                                      className={`relative group p-3 rounded-md shadow-sm border transition-all hover:shadow-md hover:-translate-y-0.5 ${
-                                          sticky.color === 'yellow' ? 'bg-yellow-50 border-yellow-200 text-yellow-900' :
-                                          sticky.color === 'blue' ? 'bg-blue-50 border-blue-200 text-blue-900' :
-                                          sticky.color === 'green' ? 'bg-green-50 border-green-200 text-green-900' :
-                                          'bg-pink-50 border-pink-200 text-pink-900'
-                                      }`}
-                                  >
-                                      {/* Folded corner effect */}
-                                      <div className="absolute bottom-0 right-0 w-3 h-3 bg-black/5 rounded-tl-sm pointer-events-none"></div>
-                                      
-                                      {sticky.isCollapsed ? (
-                                          <div 
-                                              onClick={() => {
-                                                  const newStickies = stickies.map(s => s.id === sticky.id ? { ...s, isCollapsed: false } : s);
-                                                  setStickies(newStickies);
-                                                  saveStickiesToMetadata(newStickies);
-                                              }}
-                                              className="w-full text-xs font-medium cursor-pointer truncate pr-16 opacity-70"
-                                          >
-                                              {sticky.text ? sticky.text.split('\n')[0] : "Empty note..."}
-                                          </div>
-                                      ) : (
-                                          <>
-                                              {/* CLICK-TO-EDIT INTERFACE */}
-                                              {sticky.isEditing ? (
-                                                  <textarea 
-                                                      autoFocus
-                                                      value={sticky.text}
-                                                      placeholder="Type your note here..."
-                                                      onChange={(e) => {
-                                                          const newStickies = stickies.map(s => s.id === sticky.id ? { ...s, text: e.target.value } : s);
-                                                          setStickies(newStickies);
-                                                          e.target.style.height = 'auto';
-                                                          e.target.style.height = e.target.scrollHeight + 'px';
-                                                      }}
-                                                      onBlur={() => {
-                                                          const newStickies = stickies.map(s => s.id === sticky.id ? { ...s, isEditing: false } : s);
-                                                          setStickies(newStickies);
-                                                          saveStickiesToMetadata(newStickies);
-                                                      }}
-                                                      className="w-full bg-transparent outline-none resize-none text-xs font-medium min-h-[60px] overflow-hidden placeholder:text-black/30"
-                                                  />
-                                              ) : (
-                                                  <div 
-                                                      onClick={() => {
-                                                          const newStickies = stickies.map(s => s.id === sticky.id ? { ...s, isEditing: true } : s);
-                                                          setStickies(newStickies);
-                                                      }}
-                                                      className="w-full min-h-[60px] text-xs font-medium cursor-text markdown-body sticky-markdown"
-                                                  >
-                                                      <ReactMarkdown remarkPlugins={[remarkGfm, remarkMath]} rehypePlugins={[rehypeKatex]}>
-                                                          {sticky.text || "Empty note. Click to edit."}
-                                                      </ReactMarkdown>
-                                                  </div>
-                                              )}
-                                          </>
-                                      )}
-
-                                      <div className="absolute top-2 right-2 opacity-0 group-hover:opacity-100 transition-opacity flex gap-1 bg-white/30 backdrop-blur-sm rounded px-0.5">
-                                          <button 
-                                              onClick={() => {
-                                                  const newStickies = stickies.map(s => s.id === sticky.id ? { ...s, isCollapsed: !s.isCollapsed } : s);
-                                                  setStickies(newStickies);
-                                                  saveStickiesToMetadata(newStickies);
-                                              }} 
-                                              className="text-[var(--ui-text-muted)] hover:text-indigo-600 p-0.5"
-                                              title={sticky.isCollapsed ? "Expand" : "Collapse"}
-                                          >
-                                              {sticky.isCollapsed ? <ChevronDown size={12}/> : <ChevronUp size={12}/>}
-                                          </button>
-                                          <button 
-                                              onClick={() => {
-                                                  setExternalPrompt(`Explain this note: "${sticky.text}"`);
-                                                  setRightPanelTab('assistant');
-                                              }} 
-                                              className="text-[var(--ui-primary)] hover:text-indigo-600 p-0.5"
-                                              title="Ask AI about this"
-                                          >
-                                              <Bot size={12}/>
-                                          </button>
-                                          <button onClick={() => deleteSticky(sticky.id)} className="text-red-400 hover:text-red-600 p-0.5"><X size={12}/></button>
-                                      </div>
-                                      
-                                      {!sticky.isCollapsed && (
-                                          <div className="flex gap-1 mt-2 opacity-50 group-hover:opacity-100 transition-opacity">
-                                              {['yellow', 'blue', 'green', 'pink'].map(c => (
-                                                  <button 
-                                                      key={c}
-                                                      onClick={() => {
-                                                          const newStickies = stickies.map(s => s.id === sticky.id ? { ...s, color: c as any } : s);
-                                                          setStickies(newStickies);
-                                                          saveStickiesToMetadata(newStickies);
-                                                      }}
-                                                      className={`w-3 h-3 rounded-full border border-black/10 ${
-                                                          c === 'yellow' ? 'bg-yellow-300' :
-                                                          c === 'blue' ? 'bg-blue-300' :
-                                                          c === 'green' ? 'bg-green-300' : 'bg-pink-300'
-                                                      }`}
-                                                  />
-                                              ))}
-                                          </div>
-                                      )}
-                                  </div>
-                              ))}
+                              {stickies.filter(s => !s.isFloating).map(sticky => renderSticky(sticky, false))}
                           </div>
                       )}
                   </div>
@@ -1165,6 +1270,9 @@ const OutputDisplay: React.FC<OutputDisplayProps> = ({ content, topic, onUpdateC
           )}
 
       </div>
+
+      {/* FLOATING STICKIES */}
+      {stickies.filter(s => s.isFloating).map(sticky => renderSticky(sticky, true))}
 
       {showToc && activeTab === 'preview' && toc.length > 0 && (
              <div className="fixed left-4 top-32 w-56 max-h-[60vh] overflow-y-auto custom-scrollbar bg-[var(--ui-surface)]/95 backdrop-blur border border-[var(--ui-border)] rounded-xl shadow-2xl p-4 z-40 animate-slide-up hidden xl:block">

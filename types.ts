@@ -119,6 +119,9 @@ export interface StickyNote {
   timestamp: number;
   isEditing?: boolean;
   isCollapsed?: boolean;
+  isExpandedFull?: boolean;
+  isFloating?: boolean;
+  position?: { x: number; y: number };
 }
 
 export interface HistoryItem {

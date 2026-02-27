@@ -254,18 +254,6 @@ const AssistantPanel: React.FC<AssistantPanelProps> = ({ noteMetadata, onPromptS
       {/* SCROLLABLE CONTENT */}
       <div ref={scrollContainerRef} className="flex-1 overflow-y-auto custom-scrollbar p-4 space-y-4 bg-[var(--ui-bg)]">
         
-        {/* STICKIES (Context) */}
-        {noteMetadata?.stickies && noteMetadata.stickies.length > 0 && (
-            <div className="grid grid-cols-2 gap-2 mb-4">
-                {noteMetadata.stickies.map((sticky: any, idx: number) => (
-                    <div key={idx} className="bg-yellow-100 text-yellow-900 p-2 rounded text-[10px] shadow-sm rotate-1 border border-yellow-200">
-                        <StickyNote size={10} className="mb-1 opacity-50"/>
-                        {sticky.text}
-                    </div>
-                ))}
-            </div>
-        )}
-
         {/* MESSAGES */}
         {messages.map((msg, idx) => (
             <div key={idx} className={`flex gap-3 ${msg.role === 'user' ? 'flex-row-reverse' : ''}`}>
