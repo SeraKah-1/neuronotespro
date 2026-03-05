@@ -27,6 +27,7 @@ export enum AppModel {
   GEMINI_3_PRO = 'gemini-3-pro-preview',
   GEMINI_3_FLASH = 'gemini-3-flash-preview',
   GEMINI_3_PRO_IMAGE = 'gemini-3-pro-image-preview', // Nano Banana Pro
+  GEMINI_3_1_FLASH_LITE = 'gemini-3.1-flash-lite-preview',
   
   // --- GEMINI 2.5 SERIES ---
   GEMINI_2_5_PRO = 'gemini-2.5-pro',
