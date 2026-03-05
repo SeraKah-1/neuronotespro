@@ -24,6 +24,7 @@ const GEMINI_MODELS = [
   { value: AppModel.GEMINI_3_PRO, label: 'Gemini 3.0 Pro', badge: 'Flagship' },
   { value: AppModel.GEMINI_3_FLASH, label: 'Gemini 3.0 Flash', badge: 'Fastest' },
   { value: AppModel.GEMINI_2_5_PRO, label: 'Gemini 2.5 Pro', badge: 'Stable' },
+  { value: AppModel.GEMINI_3_1_FLASH_LITE, label: 'Gemini 3.1 Flash-Lite', badge: 'Cost-Efficient' },
   { value: AppModel.GEMINI_2_5_FLASH, label: 'Gemini 2.5 Flash', badge: 'Balanced' },
   { value: AppModel.GEMINI_2_5_FLASH_LITE, label: 'Gemini 2.5 Flash-Lite', badge: 'Budget' },
   { value: AppModel.DEEP_RESEARCH_PRO, label: 'Deep Research Pro', badge: 'Agentic' },
