@@ -115,7 +115,6 @@ const Mermaid: React.FC<MermaidProps> = ({ chart, onChartChange }) => {
     const url = URL.createObjectURL(svgBlob);
     
     const img = new Image();
-    img.crossOrigin = "anonymous";
     img.onload = function() {
         const canvas = document.createElement("canvas");
         const bbox = svgElement.getBBox();
@@ -154,7 +153,7 @@ const Mermaid: React.FC<MermaidProps> = ({ chart, onChartChange }) => {
   return (
     <div className={`
         relative my-6 bg-white rounded-lg shadow-sm border border-gray-200 overflow-hidden flex flex-col group
-        ${isFullscreen ? 'fixed inset-0 z-[100] h-[100dvh] m-0 rounded-none' : isEditing ? 'h-[500px]' : 'min-h-[200px]'}
+        ${isFullscreen ? 'fixed inset-0 z-[100] h-screen m-0 rounded-none' : isEditing ? 'h-[500px]' : 'min-h-[200px]'}
     `}>
       {/* 
           CRITICAL FIX: CSS Injection for Node Text Wrapping 

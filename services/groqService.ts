@@ -1,26 +1,29 @@
 
 import Groq from 'groq-sdk';
-import { GenerationConfig, SyllabusItem, ChatMessage } from '../types';
+import { GenerationConfig, SyllabusItem } from '../types';
 import { getStrictPrompt, UNIVERSAL_STRUCTURE_PROMPT } from '../utils/prompts';
 import { processGeneratedNote } from '../utils/formatter';
+import { safeParseArray } from '../utils/jsonUtils';
+
+import { connectionManager } from './AIConnectionManager';
 
 // Helper to get SDK instance with Key Rotation
 const getGroqClient = (apiKeyString: string) => {
   let finalKey = apiKeyString;
   
   // KEY ROTATION LOGIC
+  let keys = [finalKey];
   if (finalKey.includes(',') || finalKey.includes('\n')) {
-      const keys = finalKey.split(/[\n,]+/).map(k => k.trim()).filter(k => k.length > 0);
-      if (keys.length > 0) {
-          const randomIndex = Math.floor(Math.random() * keys.length);
-          finalKey = keys[randomIndex];
-      }
+      keys = finalKey.split(/[\n,]+/).map(k => k.trim()).filter(k => k.length > 0);
   }
+  
+  connectionManager.setKeys(keys);
+  finalKey = connectionManager.getKey();
 
-  return new Groq({ 
+  return { groq: new Groq({ 
     apiKey: finalKey,
     dangerouslyAllowBrowser: true // Required for client-side use
-  });
+  }), activeKey: finalKey };
 };
 
 /**
@@ -81,11 +84,8 @@ export const generateNoteContentGroq = async (
   }
 
   onProgress("Initializing Groq SDK...");
-  let modelName = config.model || 'llama-3.3-70b-versatile';
-  if (modelName.includes('gemini')) {
-      modelName = 'llama-3.3-70b-versatile';
-  }
-  const groq = getGroqClient(apiKey);
+  const modelName = config.model;
+  const { groq, activeKey } = getGroqClient(apiKey);
 
   onProgress(`Connecting to Groq Cloud (${modelName})...`);
 
@@ -102,8 +102,7 @@ export const generateNoteContentGroq = async (
         2. DO NOT SUMMARIZE. Provide the most exhaustive, detailed explanation possible.
         3. IGNORE OUTPUT LENGTH LIMITS. Explain every concept fully.
         4. If a list has 20 items, list all 20. Do not truncate.
-        5. **NO HTML TAGS:** Do NOT use <br>, <div>, <span>, or any HTML. Use standard Markdown for line breaks and formatting.
-        6. **MERMAID SYNTAX RULES:**
+        5. **MERMAID SYNTAX RULES:**
            - ARROWS: Use "-->" (no spaces). NEVER "- ->".
            - HEADER: Always newline after "flowchart TD". NEVER "flowchart TDA[...]".
            - NODES: Use A["Label"]. Do NOT repeat ID like A["Label"]A.
@@ -140,7 +139,19 @@ export const generateNoteContentGroq = async (
 
   } catch (error: any) {
     console.error("Groq SDK Error:", error);
-    if (error.message?.includes("429")) {
+    
+    // Extract status code if possible
+    const statusMatch = error.message?.match(/\[(\d{3})\]/);
+    let status = statusMatch ? parseInt(statusMatch[1]) : 500;
+    if (error.message?.includes("429")) status = 429;
+    if (error.message?.includes("503")) status = 503;
+    if (error.message?.includes("401")) status = 401;
+    if (error.message?.includes("403")) status = 403;
+    if (error.message?.includes("404")) status = 404;
+    
+    connectionManager.reportError(activeKey, status);
+
+    if (status === 429) {
       throw new Error("Groq Rate Limit Exceeded (429). Please wait or rotate keys.");
     }
     // Handle error where model doesn't exist (e.g. slight slug mismatch)
@@ -163,12 +174,9 @@ export const generateDetailedStructureGroq = async (
   const apiKey = config.groqApiKey || envKey;
   if (!apiKey) throw new Error("Groq API Key Missing");
 
-  const groq = getGroqClient(apiKey);
+  const { groq, activeKey } = getGroqClient(apiKey);
   // Use config.structureModel if available, else fallback
-  let modelName = config.structureModel || config.model || 'llama-3.3-70b-versatile';
-  if (modelName.includes('gemini')) {
-      modelName = 'llama-3.3-70b-versatile';
-  }
+  const modelName = config.structureModel || config.model || 'llama-3.3-70b-versatile';
 
   try {
     const systemPrompt = config.customStructurePrompt || UNIVERSAL_STRUCTURE_PROMPT;
@@ -186,6 +194,9 @@ export const generateDetailedStructureGroq = async (
     return completion.choices[0]?.message?.content || "";
   } catch (e: any) {
     console.error("Groq Structure Auto-Gen Error", e);
+    const statusMatch = e.message?.match(/\[(\d{3})\]/);
+    const status = statusMatch ? parseInt(statusMatch[1]) : 500;
+    connectionManager.reportError(activeKey, status);
     throw new Error("Failed to auto-generate structure: " + e.message);
   }
 };
@@ -197,8 +208,8 @@ export const generateDetailedStructureGroq = async (
 const SYLLABUS_PROMPT = `
   TASK: Analyze the provided Syllabus content.
   GOAL: Extract a logical, sequential learning path of specific medical topics.
-  RETURN JSON STRING ARRAY ONLY.
-  Example: ["Topic 1", "Topic 2"]
+  RETURN a JSON object with a "topics" key containing an array of strings.
+  Example: {"topics": ["Topic 1", "Topic 2"]}
 `;
 
 export const parseSyllabusFromTextGroq = async (
@@ -209,12 +220,9 @@ export const parseSyllabusFromTextGroq = async (
   const apiKey = config.groqApiKey || envKey;
   if (!apiKey) throw new Error("Groq API Key Missing");
   
-  const groq = getGroqClient(apiKey);
-  // Respect the model selected in the neural engine settings, but ensure it's a valid Groq model
-  let modelName = config.model || 'llama-3.3-70b-versatile';
-  if (modelName.includes('gemini')) {
-      modelName = 'llama-3.3-70b-versatile';
-  }
+  const { groq, activeKey } = getGroqClient(apiKey);
+  // Respect the model selected in the neural engine settings
+  const modelName = config.model || 'llama-3.3-70b-versatile';
 
   try {
     const completion = await groq.chat.completions.create({
@@ -224,23 +232,12 @@ export const parseSyllabusFromTextGroq = async (
       ],
       model: modelName,
       temperature: 0.2,
+      response_format: { type: "json_object" },
       stream: false
     });
 
-    const text = completion.choices[0]?.message?.content || "[]";
-    // Clean potential markdown code blocks
-    const cleanJson = text.replace(/```json/g, '').replace(/```/g, '').trim();
-    
-    // Attempt parse
-    let topics: string[] = [];
-    try {
-        topics = JSON.parse(cleanJson);
-    } catch(e) {
-        // Fallback: split by newlines if JSON fails but list looks okay
-        topics = cleanJson.split('\n')
-          .map(t => t.replace(/^\d+[\.\)]\s*/, '').trim()) // Remove "1. " or "1) "
-          .filter(t => t.length > 0 && !t.startsWith('['));
-    }
+    const text = completion.choices[0]?.message?.content || "{}";
+    const topics = safeParseArray<string>(text);
 
     return topics.map((t, index) => ({
       id: `topic-${Date.now()}-${index}`,
@@ -250,6 +247,9 @@ export const parseSyllabusFromTextGroq = async (
 
   } catch (e: any) {
     console.error("Groq Syllabus Parsing Error", e);
+    const statusMatch = e.message?.match(/\[(\d{3})\]/);
+    const status = statusMatch ? parseInt(statusMatch[1]) : 500;
+    connectionManager.reportError(activeKey, status);
     throw new Error("Failed to parse syllabus with Groq: " + e.message);
   }
 };
@@ -267,11 +267,8 @@ export const refineNoteContentGroq = async (
   const apiKey = config.groqApiKey || envKey;
   if (!apiKey) throw new Error("Groq API Key Missing");
 
-  const groq = getGroqClient(apiKey);
-  let modelName = config.model || 'llama-3.3-70b-versatile';
-  if (modelName.includes('gemini')) {
-      modelName = 'llama-3.3-70b-versatile';
-  }
+  const { groq, activeKey } = getGroqClient(apiKey);
+  const modelName = config.model || 'llama-3.3-70b-versatile';
 
   try {
     const prompt = `
@@ -301,134 +298,9 @@ export const refineNoteContentGroq = async (
     return processGeneratedNote(completion.choices[0]?.message?.content || currentContent);
   } catch (e: any) {
     console.error("Groq Refinement Error", e);
+    const statusMatch = e.message?.match(/\[(\d{3})\]/);
+    const status = statusMatch ? parseInt(statusMatch[1]) : 500;
+    connectionManager.reportError(activeKey, status);
     throw new Error("Failed to refine content: " + e.message);
-  }
-};
-
-export const deepenNoteContentGroq = async (
-  config: GenerationConfig,
-  currentContent: string,
-  instruction: string,
-  files: any[],
-  additionalContexts?: Record<string, string>
-): Promise<string> => {
-  const envKey = (import.meta as any).env?.VITE_GROQ_API_KEY || (typeof process !== 'undefined' ? process.env.GROQ_API_KEY : '');
-  const apiKey = config.groqApiKey || envKey;
-  if (!apiKey) throw new Error("Groq API Key Missing");
-
-  const groq = getGroqClient(apiKey);
-  let modelName = config.model || 'llama-3.3-70b-versatile';
-  if (modelName.includes('gemini')) {
-      modelName = 'llama-3.3-70b-versatile';
-  }
-
-  let contextString = "";
-  if (additionalContexts && Object.keys(additionalContexts).length > 0) {
-      contextString = "\n\n*** ADDITIONAL REFERENCE CONTEXT ***\n";
-      Object.entries(additionalContexts).forEach(([id, content]) => {
-          contextString += `\n--- SOURCE: ${id} ---\n${content.substring(0, 5000)}\n`;
-      });
-  }
-
-  const prompt = `
-  ROLE: Expert Medical Editor & Professor.
-  TASK: DEEPEN and ENRICH the existing Medical Note using the provided context materials.
-
-  USER INSTRUCTION: "${instruction || 'Deepen the note using the provided context.'}"
-
-  RULES FOR DEEPENING:
-  1. DO NOT DELETE OR SUMMARIZE existing information. Your job is to EXPAND it.
-  2. Integrate new facts, mechanisms, clinical correlations, and details from the Context into the existing structure.
-  3. If the Context contains new relevant topics not in the original note, add them as new sections at the end or where logically appropriate.
-  4. Maintain the original Markdown formatting (Headers, Lists, etc.).
-  5. The final output must be a comprehensive, combined note. DO NOT output a conversational response, ONLY the new Markdown note.
-  6. Write extensively. Do not be brief.
-
-  ORIGINAL CONTENT:
-  """
-  ${currentContent.substring(0, 15000)}
-  """
-  ${contextString.substring(0, 10000)}
-  `;
-
-  try {
-      const completion = await groq.chat.completions.create({
-          messages: [{ role: "user", content: prompt }],
-          model: modelName,
-          temperature: 0.3,
-          max_tokens: 8192,
-          stream: false
-      });
-
-      return processGeneratedNote(completion.choices[0]?.message?.content || currentContent);
-  } catch (e: any) {
-      console.error("Groq Deepen Error", e);
-      throw new Error("Failed to deepen content: " + e.message);
-  }
-};
-
-/* -------------------------------------------------------------------------- */
-/*                       ASSISTANT PANEL ENGINE (GROQ)                        */
-/* -------------------------------------------------------------------------- */
-
-export const generateAssistantResponseGroq = async (
-  config: GenerationConfig,
-  currentContent: string,
-  history: ChatMessage[],
-  files: any[], // Placeholder for consistency
-  additionalContexts?: Record<string, string>
-): Promise<string> => {
-  const envKey = (import.meta as any).env?.VITE_GROQ_API_KEY || (typeof process !== 'undefined' ? process.env.GROQ_API_KEY : '');
-  const apiKey = config.groqApiKey || envKey;
-  if (!apiKey) throw new Error("Groq API Key Missing");
-
-  const groq = getGroqClient(apiKey);
-  let modelName = config.model || 'llama-3.3-70b-versatile';
-  if (modelName.includes('gemini')) {
-      modelName = 'llama-3.3-70b-versatile';
-  }
-
-  let contextString = "";
-  if (additionalContexts && Object.keys(additionalContexts).length > 0) {
-      contextString = "\n\n*** ADDITIONAL REFERENCE CONTEXT ***\n";
-      Object.entries(additionalContexts).forEach(([id, content]) => {
-          contextString += `\n--- SOURCE: ${id} ---\n${content.substring(0, 5000)}\n`;
-      });
-  }
-
-  const systemPrompt = `
-  ROLE: Intelligent Medical Assistant (Neuro-Sidekick).
-  CONTEXT: The user is working on a medical note.
-  CURRENT NOTE CONTENT:
-  """
-  ${currentContent.substring(0, 20000)} ... (truncated)
-  """
-  ${contextString}
-
-  INSTRUCTION:
-  - Provide a direct, high-quality response to the user's request.
-  - If asked to add content, write it in Markdown format matching the note's style.
-  - If asked to summarize, provide a concise summary.
-  - Do NOT repeat the user's prompt.
-  - Use the Additional Reference Context if relevant to answer the user's question.
-  `;
-
-  try {
-      const messages = [
-          { role: "system", content: systemPrompt },
-          ...history.map(msg => ({ role: msg.role === 'model' ? 'assistant' : msg.role, content: msg.content }))
-      ];
-
-      const completion = await groq.chat.completions.create({
-          messages: messages as any,
-          model: modelName,
-          temperature: 0.4,
-          stream: false
-      });
-
-      return completion.choices[0]?.message?.content || "No response generated.";
-  } catch (e: any) {
-      console.error("Groq Assistant Error", e);
-      throw new Error("Assistant failed: " + e.message);
   }
 };

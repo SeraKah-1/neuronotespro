@@ -1,4 +1,19 @@
 
+export interface KnowledgeSource {
+  id: string;
+  name: string;
+  type: 'drive' | 'local_folder' | 'pdf_collection' | 'local_file'; // Added local_file
+  status: 'syncing' | 'ready' | 'error' | 'disconnected';
+  lastSync: number;
+  fileCount: number;
+  sizeBytes: number;
+  icon?: string;
+  config?: {
+    driveFolderId?: string;
+    folderPath?: string;
+  };
+}
+
 export interface LibraryMaterial {
   id: string;
   created_at?: string;
@@ -8,6 +23,19 @@ export interface LibraryMaterial {
   file_type: string;
   tags?: string[];
   size?: number; // Optional helper for UI
+}
+
+export interface KnowledgeFile {
+  id: string;
+  sourceId: string;
+  name: string;
+  type: string;
+  size: number;
+  indexed: boolean; // aka isTokenized
+  contentSnippet?: string; // First 100 chars for preview
+  vectorId?: string; // Future proofing for true RAG
+  fileId?: string; // Reference to file storage if applicable
+  data?: string; // NEW: Base64 data for local RAG usage
 }
 
 export enum NoteMode {
@@ -27,12 +55,11 @@ export enum AppModel {
   GEMINI_3_PRO = 'gemini-3-pro-preview',
   GEMINI_3_FLASH = 'gemini-3-flash-preview',
   GEMINI_3_PRO_IMAGE = 'gemini-3-pro-image-preview', // Nano Banana Pro
-  GEMINI_3_1_FLASH_LITE = 'gemini-3.1-flash-lite-preview',
   
   // --- GEMINI 2.5 SERIES ---
   GEMINI_2_5_PRO = 'gemini-2.5-pro',
   GEMINI_2_5_FLASH = 'gemini-2.5-flash',
-  GEMINI_2_5_FLASH_LITE = 'gemini-2.5-flash-lite',
+  GEMINI_3_1_FLASH_LITE = 'gemini-3.1-flash-lite-preview',
   
   // --- SPECIALIZED ---
   DEEP_RESEARCH_PRO = 'deep-research-pro-preview-12-2025',
@@ -53,8 +80,10 @@ export enum StorageType {
 export interface UploadedFile {
   name: string;
   mimeType: string;
-  data: string;
+  fileId: string;
+  size: number;
   isTokenized?: boolean;
+  data?: string;
 }
 
 export interface GenerationConfig {
@@ -92,8 +121,6 @@ export interface NoteData {
   topic: string;
   files: UploadedFile[];
   structure: string;
-  structureProvider?: AIProvider;
-  structureModel?: string;
 }
 
 export enum AppView {
@@ -101,7 +128,8 @@ export enum AppView {
   SYLLABUS = 'syllabus',
   KNOWLEDGE = 'knowledge',
   ARCHIVE = 'archive',
-  SETTINGS = 'settings'
+  SETTINGS = 'settings',
+  CANVAS = 'canvas'
 }
 
 export interface AppState {
@@ -113,21 +141,12 @@ export interface AppState {
   activeNoteId: string | null;
 }
 
-export interface StickyNote {
-  id: string;
-  text: string;
-  color: 'yellow' | 'blue' | 'green' | 'pink';
-  timestamp: number;
-  isEditing?: boolean;
-  isCollapsed?: boolean;
-  isExpandedFull?: boolean;
-  isFloating?: boolean;
-  position?: { x: number; y: number };
-}
-
 export interface HistoryItem {
   id: string;
   timestamp: number;
+  updated_at?: number;
+  keycard_id?: string;
+  user_id?: string;
   topic: string;
   mode: NoteMode;
   content: string;
@@ -136,11 +155,13 @@ export interface HistoryItem {
   folderId?: string;
   tags?: string[];
   _status?: 'local' | 'synced' | 'cloud';
-  snippet?: string;
-  metadata?: {
-    stickies: StickyNote[];
-    contextFiles: any[];
-  };
+  _deleted?: boolean;
+  _version?: number;
+}
+
+export interface SyncMetadata {
+  id: string;
+  value: number;
 }
 
 export interface Folder {
@@ -183,17 +204,18 @@ export interface NeuroKeyFile {
   };
 }
 
+export interface QuizQuestion {
+  question: string;
+  options: string[];
+  correctIndex: number;
+  explanation: string;
+}
+
 export enum AppTheme {
   CLINICAL_CLEAN = 'clinical_clean',
   ACADEMIC_PAPER = 'academic_paper',
   SEPIA_FOCUS = 'sepia_focus'
 }
-
-export const GEMINI_MODELS_LIST = [
-  { value: AppModel.GEMINI_3_PRO, label: 'Gemini 3.0 Pro' },
-  { value: AppModel.GEMINI_3_FLASH, label: 'Gemini 3.0 Flash' },
-  { value: AppModel.GEMINI_2_5_FLASH, label: 'Gemini 2.5 Flash' },
-];
 
 export const MODE_STRUCTURES: Record<NoteMode, string> = {
   [NoteMode.GENERAL]: "# 1. Definition\n# 2. Pathophysiology\n# 3. Clinical Features\n# 4. Diagnosis\n# 5. Management",

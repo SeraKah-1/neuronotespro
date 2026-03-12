@@ -1,22 +1,33 @@
 
 import React, { useState, useEffect, useMemo, useRef } from 'react';
 import { Upload, FileText, CheckCircle, Circle, Play, RefreshCw, Trash2, ListChecks, ArrowRight, FolderOpen, Save, Type, Edit2, Archive, Zap, PauseCircle, StopCircle, Layout, AlertCircle, CheckCircle2, Loader2, BookOpen, Settings2, Eye, ShieldAlert, GripVertical, ChevronDown, ChevronUp, Split, Cpu, Sparkles } from 'lucide-react';
-import { SyllabusItem, UploadedFile, GenerationConfig, SavedQueue, AIProvider, AppModel, GEMINI_MODELS_LIST } from '../types';
+import { SyllabusItem, UploadedFile, GenerationConfig, SavedQueue, AIProvider, AppModel } from '../types';
 import FileUploader from './FileUploader';
-import { parseSyllabusToTopics, parseSyllabusFromText } from '../services/geminiService';
-import { parseSyllabusFromTextGroq } from '../services/groqService';
+import { aiWorker } from '../workerClient';
 import { StorageService } from '../services/storageService';
 import { QueueService } from '../services/queueService';
+import { FileStorageService } from '../services/fileStorageService';
 
 interface SyllabusFlowProps {
   config: GenerationConfig;
   onSelectTopic: (topic: string) => void;
-  groqModels: {value: string, label: string, badge: string}[];
 }
+
+const GEMINI_MODELS = [
+  { value: AppModel.GEMINI_3_PRO, label: 'Gemini 3.0 Pro' },
+  { value: AppModel.GEMINI_3_FLASH, label: 'Gemini 3.0 Flash' },
+  { value: AppModel.GEMINI_2_5_FLASH, label: 'Gemini 2.5 Flash' },
+];
+
+const GROQ_MODELS = [
+  { value: AppModel.GROQ_LLAMA_3_3_70B, label: 'Llama 3.3 70B' },
+  { value: AppModel.GROQ_LLAMA_3_1_8B, label: 'Llama 3.1 8B (Fast)' },
+  { value: AppModel.GROQ_MIXTRAL_8X7B, label: 'Mixtral 8x7B' },
+];
 
 type TabMode = 'upload' | 'text' | 'library';
 
-const SyllabusFlow: React.FC<SyllabusFlowProps> = ({ config, onSelectTopic, groqModels }) => {
+const SyllabusFlow: React.FC<SyllabusFlowProps> = ({ config, onSelectTopic }) => {
   const [syllabusFile, setSyllabusFile] = useState<UploadedFile[]>([]);
   const [rawText, setRawText] = useState('');
   
@@ -39,15 +50,11 @@ const SyllabusFlow: React.FC<SyllabusFlowProps> = ({ config, onSelectTopic, groq
   const [batchConfig, setBatchConfig] = useState<{
       structureProvider: AIProvider | null;
       structureModel: string;
-      contentProvider: AIProvider | null;
-      contentModel: string;
       customStructurePrompt: string;
       customContentPrompt: string;
   }>({
       structureProvider: null,
       structureModel: '',
-      contentProvider: null,
-      contentModel: '',
       customStructurePrompt: '',
       customContentPrompt: ''
   });
@@ -59,20 +66,9 @@ const SyllabusFlow: React.FC<SyllabusFlowProps> = ({ config, onSelectTopic, groq
   const [savedQueues, setSavedQueues] = useState<SavedQueue[]>([]);
   const [storageService] = useState(StorageService.getInstance());
   const [queueService] = useState(QueueService.getInstance());
+  const [fileStorage] = useState(FileStorageService.getInstance());
 
   useEffect(() => {
-    const savedMeta = localStorage.getItem('neuro_syllabus_meta');
-    if (savedMeta) {
-      const meta = JSON.parse(savedMeta);
-      setQueueName(meta.name);
-      setQueueId(meta.id);
-    }
-    const savedQueue = localStorage.getItem('neuro_syllabus_queue');
-    if (savedQueue) {
-       const parsed = JSON.parse(savedQueue);
-       setQueue(parsed);
-       queueService.setQueue(parsed);
-    }
     // Load saved prompt config
     const savedPrompts = localStorage.getItem('neuro_batch_config');
     if (savedPrompts) {
@@ -80,23 +76,26 @@ const SyllabusFlow: React.FC<SyllabusFlowProps> = ({ config, onSelectTopic, groq
     }
 
     loadLibrary();
-    const unsubscribe = queueService.subscribe((updatedQueue, processing, cStatus) => {
+    const unsubscribe = queueService.subscribe(async (updatedQueue, processing, cStatus) => {
        setQueue(updatedQueue);
        setIsProcessing(processing);
        setCircuitStatus(cStatus || null);
+       
+       // Sync meta with current queue
+       const queues = await storageService.getQueues();
+       const currentQueue = queues.find(q => q.id === queueService.getCurrentQueueId());
+       if (currentQueue) {
+         setQueueName(currentQueue.name);
+         setQueueId(currentQueue.id);
+       }
     });
     return () => unsubscribe();
   }, []);
 
-  useEffect(() => {
-    localStorage.setItem('neuro_syllabus_meta', JSON.stringify({ id: queueId, name: queueName }));
-  }, [queueName, queueId]);
-
   const loadLibrary = async () => {
     const queues = await storageService.getQueues();
     setSavedQueues(queues);
-    const savedQueue = localStorage.getItem('neuro_syllabus_queue');
-    if (queues.length === 0 && (!savedQueue || JSON.parse(savedQueue).length === 0)) {
+    if (queues.length === 0) {
         setActiveTab('upload');
     }
   };
@@ -116,12 +115,13 @@ const SyllabusFlow: React.FC<SyllabusFlowProps> = ({ config, onSelectTopic, groq
       if (activeTab === 'upload') {
         if (syllabusFile.length === 0) throw new Error("Please upload a file.");
         if (currentProvider === AIProvider.GEMINI) {
-            topics = await parseSyllabusToTopics(config, syllabusFile[0]);
+            topics = await aiWorker.parseSyllabusToTopics(config, syllabusFile[0]);
         } else if (currentProvider === AIProvider.GROQ) {
             const file = syllabusFile[0];
             if (file.mimeType.includes('text') || file.name.match(/\.(md|txt|json)$/i)) {
-                const decoded = atob(file.data);
-                topics = await parseSyllabusFromTextGroq(config, decoded);
+                const base64 = await fileStorage.getFileAsBase64(file.fileId);
+                const decoded = atob(base64);
+                topics = await aiWorker.parseSyllabusFromText(config, decoded);
             } else {
                 throw new Error("Groq currently supports text-based files for parsing. Use Gemini for PDF/Images.");
             }
@@ -129,16 +129,13 @@ const SyllabusFlow: React.FC<SyllabusFlowProps> = ({ config, onSelectTopic, groq
         setSyllabusFile([]);
       } else if (activeTab === 'text') {
         if (!rawText.trim()) throw new Error("Please enter syllabus text.");
-        if (currentProvider === AIProvider.GEMINI) {
-            topics = await parseSyllabusFromText(config, rawText);
-        } else {
-            topics = await parseSyllabusFromTextGroq(config, rawText);
-        }
+        topics = await aiWorker.parseSyllabusFromText(config, rawText);
         setRawText('');
       }
       setQueue(topics);
-      queueService.setQueue(topics);
-      setQueueId(Date.now().toString());
+      const newQueueId = Date.now().toString();
+      queueService.setQueue(topics, newQueueId);
+      setQueueId(newQueueId);
       setQueueName("New Curriculum");
     } catch (e: any) { setError(e.message); } finally { setIsParsing(false); }
   };
@@ -153,9 +150,6 @@ const SyllabusFlow: React.FC<SyllabusFlowProps> = ({ config, onSelectTopic, groq
          autoApprove,
          structureProvider: batchConfig.structureProvider || undefined,
          structureModel: batchConfig.structureModel || undefined,
-         // Use content provider/model overrides if set, otherwise fallback to global config
-         provider: batchConfig.contentProvider || config.provider,
-         model: batchConfig.contentModel || config.model,
          customStructurePrompt: batchConfig.customStructurePrompt || undefined,
          customContentPrompt: batchConfig.customContentPrompt || undefined
      };
@@ -169,7 +163,7 @@ const SyllabusFlow: React.FC<SyllabusFlowProps> = ({ config, onSelectTopic, groq
   const handleSaveToLibrary = async () => { if (queue.length === 0) return; const idToSave = queueId || Date.now().toString(); const newQueue: SavedQueue = { id: idToSave, name: queueName, items: queue, timestamp: Date.now() }; await storageService.saveQueue(newQueue); setQueueId(idToSave); await loadLibrary(); alert("Saved to Library!"); };
   const handleLoadFromLibrary = (saved: SavedQueue) => { if (isProcessing) return alert("Stop processing first."); if (queue.length > 0 && confirm("Overwrite active queue?") === false) return; setQueue(saved.items); queueService.setQueue(saved.items); setQueueName(saved.name); setQueueId(saved.id); setActiveTab('upload'); };
   const handleDeleteFromLibrary = async (id: string, e: React.MouseEvent) => { e.stopPropagation(); if (confirm("Delete this curriculum?")) { await storageService.deleteQueue(id); await loadLibrary(); } };
-  const handleClearActive = () => { if (isProcessing) return alert("Stop processing first."); if (confirm("Clear active workspace?")) { setQueue([]); queueService.setQueue([]); setQueueId(null); setQueueName('My Curriculum'); localStorage.removeItem('neuro_syllabus_queue'); localStorage.removeItem('neuro_syllabus_meta'); setBatchConfig({ structureProvider: null, structureModel: '', contentProvider: null, contentModel: '', customStructurePrompt: '', customContentPrompt: '' }); } };
+  const handleClearActive = () => { if (isProcessing) return alert("Stop processing first."); if (confirm("Clear active workspace?")) { setQueue([]); queueService.setQueue([]); setQueueId(null); setQueueName('My Curriculum'); setBatchConfig({ structureProvider: null, structureModel: '', customStructurePrompt: '', customContentPrompt: '' }); } };
 
   const completedCount = queue.filter(q => q.status === 'done').length;
   const phase1Count = queue.filter(q => ['struct_ready', 'generating_note', 'done', 'paused_for_review'].includes(q.status)).length;
@@ -357,7 +351,7 @@ const SyllabusFlow: React.FC<SyllabusFlowProps> = ({ config, onSelectTopic, groq
                                             onChange={(e) => setBatchConfig({...batchConfig, structureModel: e.target.value})}
                                             className="w-full bg-[var(--ui-bg)] border border-[var(--ui-border)] rounded p-2 text-xs text-[var(--ui-text-main)] outline-none"
                                         >
-                                            {(batchConfig.structureProvider === AIProvider.GEMINI ? GEMINI_MODELS_LIST : groqModels).map(m => (
+                                            {(batchConfig.structureProvider === AIProvider.GEMINI ? GEMINI_MODELS : GROQ_MODELS).map(m => (
                                                 <option key={m.value} value={m.value}>{m.label}</option>
                                             ))}
                                         </select>
@@ -386,44 +380,10 @@ const SyllabusFlow: React.FC<SyllabusFlowProps> = ({ config, onSelectTopic, groq
                              </div>
 
                              <div className="p-3 bg-[var(--ui-surface)] rounded-lg border border-[var(--ui-border)] space-y-3 h-full">
-                                <div className="space-y-1">
-                                    <label className="text-[10px] text-[var(--ui-text-muted)] font-bold">Content Provider Override</label>
-                                    <div className="flex gap-2">
-                                        <button 
-                                            onClick={() => setBatchConfig({...batchConfig, contentProvider: null})}
-                                            className={`flex-1 py-1.5 text-[10px] font-bold rounded border transition-colors ${batchConfig.contentProvider === null ? 'bg-[var(--ui-primary)]/20 border-[var(--ui-primary)] text-[var(--ui-text-main)]' : 'bg-[var(--ui-bg)] border-[var(--ui-border)] text-[var(--ui-text-muted)]'}`}
-                                        >
-                                            Global
-                                        </button>
-                                        <button 
-                                            onClick={() => setBatchConfig({...batchConfig, contentProvider: AIProvider.GEMINI, contentModel: AppModel.GEMINI_2_5_FLASH})}
-                                            className={`flex-1 py-1.5 text-[10px] font-bold rounded border transition-colors ${batchConfig.contentProvider === AIProvider.GEMINI ? 'bg-indigo-900/40 border-indigo-500 text-indigo-200' : 'bg-[var(--ui-bg)] border-[var(--ui-border)] text-[var(--ui-text-muted)]'}`}
-                                        >
-                                            Gemini
-                                        </button>
-                                        <button 
-                                            onClick={() => setBatchConfig({...batchConfig, contentProvider: AIProvider.GROQ, contentModel: AppModel.GROQ_LLAMA_3_1_8B})}
-                                            className={`flex-1 py-1.5 text-[10px] font-bold rounded border transition-colors ${batchConfig.contentProvider === AIProvider.GROQ ? 'bg-orange-900/40 border-orange-500 text-orange-200' : 'bg-[var(--ui-bg)] border-[var(--ui-border)] text-[var(--ui-text-muted)]'}`}
-                                        >
-                                            Groq
-                                        </button>
-                                    </div>
+                                <div className="flex items-center justify-between text-[10px] text-[var(--ui-text-muted)] bg-[var(--ui-bg)] p-2 rounded">
+                                    <span>Uses Global Config:</span>
+                                    <span className="font-bold text-[var(--ui-text-main)]">{config.provider.toUpperCase()} / {config.model.split('/').pop()}</span>
                                 </div>
-                                
-                                {batchConfig.contentProvider && (
-                                    <div className="space-y-1 animate-fade-in">
-                                        <label className="text-[10px] text-[var(--ui-text-muted)] font-bold">Specific Model</label>
-                                        <select 
-                                            value={batchConfig.contentModel} 
-                                            onChange={(e) => setBatchConfig({...batchConfig, contentModel: e.target.value})}
-                                            className="w-full bg-[var(--ui-bg)] border border-[var(--ui-border)] rounded p-2 text-xs text-[var(--ui-text-main)] outline-none"
-                                        >
-                                            {(batchConfig.contentProvider === AIProvider.GEMINI ? GEMINI_MODELS_LIST : groqModels).map(m => (
-                                                <option key={m.value} value={m.value}>{m.label}</option>
-                                            ))}
-                                        </select>
-                                    </div>
-                                )}
 
                                 <div className="space-y-1 relative">
                                     <div className="flex justify-between">

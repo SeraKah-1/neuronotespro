@@ -1,10 +1,11 @@
-import React, { useState, useEffect, Suspense } from 'react';
-import { BrainCircuit, Settings2, Sparkles, BookOpen, Layers, Zap, AlertCircle, X, Key, GraduationCap, Microscope, Puzzle, Database, Cloud, Layout, Activity, FlaskConical, ListChecks, Bell, HelpCircle, Copy, Check, ShieldCheck, Cpu, Unlock, Download, RefreshCw, User, Lock, Server, PenTool, Wand2, ChevronRight, FileText, FolderOpen, Trash2, CheckCircle2, Circle, Command, Bot, Maximize2, Home, Minimize2, Component, Save, BookTemplate, ChevronDown, ChevronUp, MessageSquarePlus, Library, Palette, Sun, Moon, Coffee, Network, LogOut, ArrowLeftFromLine, ArrowRightFromLine, Filter, Menu, PlusCircle, Paperclip } from 'lucide-react';
+import React, { useState, useEffect, Suspense, useRef } from 'react';
+import { BrainCircuit, Settings2, Sparkles, BookOpen, Layers, Zap, AlertCircle, X, Key, GraduationCap, Microscope, Puzzle, Database, HardDrive, Cloud, Layout, Activity, FlaskConical, ListChecks, Bell, HelpCircle, Copy, Check, ShieldCheck, Cpu, Unlock, Download, RefreshCw, User, Lock, Server, PenTool, Wand2, ChevronRight, FileText, FolderOpen, Trash2, CheckCircle2, Circle, Command, Bot, Maximize2, Home, Projector, Minimize2, Component, Save, BookTemplate, ChevronDown, ChevronUp, MessageSquarePlus, Library, Palette, Sun, Moon, Coffee, Network, LogOut, Map, ArrowLeftFromLine, ArrowRightFromLine, Filter, Menu, PlusCircle, Paperclip } from 'lucide-react';
 import { AppModel, AppState, NoteData, GenerationConfig, MODE_STRUCTURES, NoteMode, HistoryItem, AIProvider, StorageType, AppView, EncryptedPayload, SavedPrompt, AppTheme } from './types';
-import { generateNoteContent, generateDetailedStructure } from './services/geminiService';
-import { generateNoteContentGroq, fetchGroqModels, generateDetailedStructureGroq } from './services/groqService';
+import { fetchGroqModels } from './services/groqService';
 import { StorageService } from './services/storageService';
 import { NotificationService } from './services/notificationService';
+import { aiWorker } from './workerClient';
+import * as Comlink from 'comlink';
 import FileUploader from './components/FileUploader';
 import SyllabusFlow from './components/SyllabusFlow';
 import LoginGate from './components/LoginGate';
@@ -24,9 +25,8 @@ const GEMINI_MODELS = [
   { value: AppModel.GEMINI_3_PRO, label: 'Gemini 3.0 Pro', badge: 'Flagship' },
   { value: AppModel.GEMINI_3_FLASH, label: 'Gemini 3.0 Flash', badge: 'Fastest' },
   { value: AppModel.GEMINI_2_5_PRO, label: 'Gemini 2.5 Pro', badge: 'Stable' },
-  { value: AppModel.GEMINI_3_1_FLASH_LITE, label: 'Gemini 3.1 Flash-Lite', badge: 'Cost-Efficient' },
   { value: AppModel.GEMINI_2_5_FLASH, label: 'Gemini 2.5 Flash', badge: 'Balanced' },
-  { value: AppModel.GEMINI_2_5_FLASH_LITE, label: 'Gemini 2.5 Flash-Lite', badge: 'Budget' },
+  { value: AppModel.GEMINI_3_1_FLASH_LITE, label: 'Gemini 3.1 Flash-Lite', badge: 'Budget' },
   { value: AppModel.DEEP_RESEARCH_PRO, label: 'Deep Research Pro', badge: 'Agentic' },
 ];
 
@@ -38,6 +38,9 @@ const INITIAL_GROQ_MODELS = [
 
 const AppContent: React.FC = () => {
   const [isAuthenticated, setIsAuthenticated] = useState(false);
+  const [keycardId, setKeycardId] = useState<string | null>(localStorage.getItem('neuro_keycard_id'));
+  const [isSyncing, setIsSyncing] = useState(false);
+  const syncWorkerRef = useRef<any>(null);
   const [showPalette, setShowPalette] = useState(false);
   const [focusMode, setFocusMode] = useState(false);
   const [showTemplates, setShowTemplates] = useState(false);
@@ -92,6 +95,29 @@ const AppContent: React.FC = () => {
   const [showAdminModal, setShowAdminModal] = useState(false);
   const [savedTemplates, setSavedTemplates] = useState<SavedPrompt[]>([]);
 
+  // --- SYNC WORKER INITIALIZATION ---
+  useEffect(() => {
+    const worker = new Worker(new URL('./sync.worker.ts', import.meta.url), { type: 'module' });
+    const syncWorker = Comlink.wrap(worker);
+    syncWorkerRef.current = syncWorker;
+
+    if (config.supabaseUrl && config.supabaseKey) {
+      (syncWorker as any).init(
+        config.supabaseUrl,
+        config.supabaseKey,
+        Comlink.proxy((status: boolean) => setIsSyncing(status))
+      );
+    }
+
+    return () => worker.terminate();
+  }, [config.supabaseUrl, config.supabaseKey]);
+
+  useEffect(() => {
+    if (isAuthenticated && keycardId && config.supabaseUrl && config.supabaseKey) {
+      syncWorkerRef.current?.pullFromCloud(keycardId);
+    }
+  }, [isAuthenticated, keycardId, config.supabaseUrl, config.supabaseKey]);
+
   // --- SESSION PERSISTENCE (AUTO LOGIN) ---
   useEffect(() => {
       const localGeminiKey = localStorage.getItem('neuro_gemini_key');
@@ -118,7 +144,7 @@ const AppContent: React.FC = () => {
       }
 
       if (localSbUrl && localSbKey) { storageService.initSupabase(localSbUrl, localSbKey); }
-      setSavedTemplates(storageService.getTemplates());
+      storageService.getTemplates().then(setSavedTemplates);
       const savedTheme = localStorage.getItem('neuro_theme');
       if (savedTheme) { setCurrentTheme(savedTheme as AppTheme); }
   }, []);
@@ -174,7 +200,10 @@ const AppContent: React.FC = () => {
   }, [focusMode, showPalette]);
 
   // Handlers
-  const handleAuthUnlock = (payload: EncryptedPayload) => {
+  const handleAuthUnlock = (payload: EncryptedPayload, id: string) => {
+    setKeycardId(id);
+    localStorage.setItem('neuro_keycard_id', id);
+    
     setConfig(prev => ({ 
       ...prev, 
       apiKey: payload.geminiKey || prev.apiKey, 
@@ -195,6 +224,7 @@ const AppContent: React.FC = () => {
     
     setIsAuthenticated(true);
     notificationService.requestPermissionManual();
+    notificationService.send("Access Granted", `Neural Uplink Established for ${id}`, "auth-success");
   };
 
   const handleThemeChange = (theme: AppTheme) => { setCurrentTheme(theme); localStorage.setItem('neuro_theme', theme); };
@@ -239,6 +269,7 @@ const AppContent: React.FC = () => {
     try {
       // PREPARE CONTEXT (if any)
       let filesToUpload = [...noteData.files];
+      let contextNotes: { title: string, content: string }[] = [];
       
       if (selectedContextIds.length > 0) {
           setAppState(prev => ({ ...prev, progressStep: 'Fetching Library Context...' }));
@@ -250,21 +281,19 @@ const AppContent: React.FC = () => {
              const meta = contextNotesMeta.find(m => m.id === id);
              const title = meta ? meta.topic : `Context_${idx}`;
              
-             filesToUpload.push({
-                 name: `CONTEXT_NOTE: ${title}.md`,
-                 mimeType: 'text/plain',
-                 data: btoa(content as string), // Base64 encode the text content
-                 isTokenized: true
-             });
+             contextNotes.push({ title, content: content as string });
           });
       }
 
       let content = '';
-      if (config.provider === AIProvider.GEMINI) { 
-          content = await generateNoteContent(config, noteData.topic, noteData.structure, filesToUpload, (step) => setAppState(prev => ({ ...prev, progressStep: step }))); 
-      } else { 
-          content = await generateNoteContentGroq(config, noteData.topic, noteData.structure, (step) => setAppState(prev => ({ ...prev, progressStep: step }))); 
-      }
+      content = await aiWorker.generateNoteContent(
+          config, 
+          noteData.topic, 
+          noteData.structure, 
+          filesToUpload, 
+          contextNotes,
+          Comlink.proxy((step: string) => setAppState(prev => ({ ...prev, progressStep: step })))
+      );
       
       notificationService.send("Note Complete", `"${noteData.topic}" ready.`, "gen-complete");
       setAppState(prev => ({ ...prev, isLoading: false, generatedContent: content, error: null, progressStep: 'Complete' }));
@@ -300,7 +329,8 @@ const AppContent: React.FC = () => {
     };
 
     if (currentId) {
-      const existingMeta = storageService.getLocalNotesMetadata().find(n => n.id === currentId);
+      const metas = await storageService.getLocalNotesMetadata();
+      const existingMeta = metas.find(n => n.id === currentId);
       if (existingMeta) {
         Object.assign(noteToSave, {
           ...existingMeta,
@@ -354,14 +384,15 @@ const AppContent: React.FC = () => {
 
   // Load context options on mount
   useEffect(() => {
-     const metas = storageService.getLocalNotesMetadata();
-     setContextNotesMeta(metas.sort((a,b) => b.timestamp - a.timestamp));
+     storageService.getLocalNotesMetadata().then(metas => {
+         setContextNotesMeta(metas.sort((a,b) => b.timestamp - a.timestamp));
+     });
   }, []);
 
   if (!isAuthenticated) { return <LoginGate onUnlock={handleAuthUnlock} />; }
 
   return (
-    <div className={`h-[100dvh] w-full flex font-sans overflow-hidden transition-colors duration-300 theme-${currentTheme} bg-[var(--ui-bg)] text-[var(--ui-text-main)]`}>
+    <div className={`min-h-screen flex font-sans overflow-hidden transition-colors duration-300 theme-${currentTheme} bg-[var(--ui-bg)] text-[var(--ui-text-main)]`}>
       
       <CommandPalette 
         isOpen={showPalette} 
@@ -375,7 +406,7 @@ const AppContent: React.FC = () => {
       />
 
       {/* --- 1. PRIMARY SIDEBAR (Desktop: Icon Strip, Mobile: Hidden) --- */}
-      <aside className={`hidden md:flex w-[70px] h-[100dvh] bg-[var(--ui-sidebar)] border-r border-[var(--ui-border)] flex-col items-center py-6 shrink-0 z-40 transition-all ${focusMode ? '-translate-x-full absolute' : 'relative'}`}>
+      <aside className={`hidden md:flex w-[70px] h-screen bg-[var(--ui-sidebar)] border-r border-[var(--ui-border)] flex-col items-center py-6 shrink-0 z-40 transition-all ${focusMode ? '-translate-x-full absolute' : 'relative'}`}>
          <div className="mb-8">
              <div className="w-10 h-10 bg-[var(--ui-primary)] rounded-xl flex items-center justify-center shadow-lg shadow-[var(--ui-primary)]/20">
                  <BrainCircuit className="text-white" size={22} />
@@ -397,7 +428,7 @@ const AppContent: React.FC = () => {
 
       {/* --- 2. SECONDARY SIDEBAR (Desktop: File Tree, Mobile: Slide-over) --- */}
       <aside className={`
-          w-[280px] h-[100dvh] bg-[var(--ui-sidebar-secondary)] border-r border-[var(--ui-border)] flex flex-col transition-all duration-300 z-30
+          w-[280px] h-screen bg-[var(--ui-sidebar-secondary)] border-r border-[var(--ui-border)] flex flex-col transition-all duration-300 z-30
           fixed md:relative left-0 top-0 bottom-0
           ${(focusMode || navCollapsed) ? 'md:w-0 md:opacity-0 md:overflow-hidden' : 'md:w-[280px] md:opacity-100'}
           ${mobileMenuOpen ? 'translate-x-0 shadow-2xl' : '-translate-x-full md:translate-x-0'}
@@ -418,7 +449,7 @@ const AppContent: React.FC = () => {
       {mobileMenuOpen && <div className="fixed inset-0 bg-black/50 z-20 md:hidden" onClick={() => setMobileMenuOpen(false)}></div>}
 
       {/* --- 3. MAIN CANVAS --- */}
-      <main className="flex-1 relative h-[100dvh] overflow-hidden flex flex-col bg-[var(--ui-bg)]">
+      <main className="flex-1 relative h-screen overflow-hidden flex flex-col bg-[var(--ui-bg)]">
          
          {/* MOBILE HEADER */}
          <div className="md:hidden h-14 bg-[var(--ui-sidebar)] border-b border-[var(--ui-border)] flex items-center justify-between px-4 shrink-0 z-20">
@@ -490,7 +521,7 @@ const AppContent: React.FC = () => {
                      </div>
                  )}
 
-                 {appState.currentView === AppView.SYLLABUS && <SyllabusFlow config={config} onSelectTopic={(t) => { setNoteData(prev => ({...prev, topic: t})); setAppState(prev => ({...prev, currentView: AppView.WORKSPACE})); }} groqModels={groqModels} />}
+                 {appState.currentView === AppView.SYLLABUS && <SyllabusFlow config={config} onSelectTopic={(t) => { setNoteData(prev => ({...prev, topic: t})); setAppState(prev => ({...prev, currentView: AppView.WORKSPACE})); }} />}
 
                  {appState.currentView === AppView.SETTINGS && (
                      /* SETTINGS PANEL */
@@ -671,7 +702,6 @@ const AppContent: React.FC = () => {
                             onManualSave={handleManualSave}
                             onExit={handleExitNote}
                             theme={currentTheme} 
-                            groqModels={groqModels}
                          />
                      </Suspense>
                  )}

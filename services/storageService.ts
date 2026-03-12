@@ -1,79 +1,19 @@
 
 import { createClient, SupabaseClient } from '@supabase/supabase-js';
-import { HistoryItem, Folder, SavedPrompt, SavedQueue, LibraryMaterial } from '../types';
-
-// --- INDEXED DB HELPER (Raw Implementation to avoid external deps) ---
-const DB_NAME = 'NeuroNoteDB';
-const DB_VERSION = 1;
-const STORE_CONTENT = 'note_content';
-const STORE_FILES = 'knowledge_files';
-
-class IDBAdapter {
-  private db: IDBDatabase | null = null;
-
-  async init(): Promise<void> {
-    if (this.db) return;
-    return new Promise((resolve, reject) => {
-      const request = indexedDB.open(DB_NAME, DB_VERSION);
-      request.onupgradeneeded = (event) => {
-        const db = (event.target as IDBOpenDBRequest).result;
-        if (!db.objectStoreNames.contains(STORE_CONTENT)) {
-          db.createObjectStore(STORE_CONTENT); // Key: Note ID, Value: Content String
-        }
-        if (!db.objectStoreNames.contains(STORE_FILES)) {
-          db.createObjectStore(STORE_FILES); // Key: SourceId_FileId, Value: Blob/Base64
-        }
-      };
-      request.onsuccess = (event) => {
-        this.db = (event.target as IDBOpenDBRequest).result;
-        resolve();
-      };
-      request.onerror = (event) => reject(event);
-    });
-  }
-
-  async put(storeName: string, key: string, value: any): Promise<void> {
-    await this.init();
-    return new Promise((resolve, reject) => {
-      const tx = this.db!.transaction(storeName, 'readwrite');
-      const store = tx.objectStore(storeName);
-      const req = store.put(value, key);
-      req.onsuccess = () => resolve();
-      req.onerror = () => reject(req.error);
-    });
-  }
-
-  async get(storeName: string, key: string): Promise<any> {
-    await this.init();
-    return new Promise((resolve, reject) => {
-      const tx = this.db!.transaction(storeName, 'readonly');
-      const store = tx.objectStore(storeName);
-      const req = store.get(key);
-      req.onsuccess = () => resolve(req.result);
-      req.onerror = () => reject(req.error);
-    });
-  }
-
-  async delete(storeName: string, key: string): Promise<void> {
-    await this.init();
-    return new Promise((resolve, reject) => {
-      const tx = this.db!.transaction(storeName, 'readwrite');
-      const store = tx.objectStore(storeName);
-      const req = store.delete(key);
-      req.onsuccess = () => resolve();
-      req.onerror = () => reject(req.error);
-    });
-  }
-}
+import { HistoryItem, Folder, SavedPrompt, SavedQueue, KnowledgeSource, KnowledgeFile, LibraryMaterial } from '../types';
+import { db } from '../db';
+import { FileStorageService } from './fileStorageService';
 
 export class StorageService {
   private static instance: StorageService;
   private supabase: SupabaseClient | null = null;
-  private idb: IDBAdapter;
+  private fileStorage: FileStorageService;
   
   private constructor() {
-    this.idb = new IDBAdapter();
-    this.idb.init().catch(err => console.error("Failed to init IDB", err));
+    this.fileStorage = FileStorageService.getInstance();
+    if (typeof window !== 'undefined') {
+      this.migrateFromLocalStorage().catch(err => console.error("Migration failed", err));
+    }
   }
 
   public static getInstance(): StorageService {
@@ -83,12 +23,91 @@ export class StorageService {
     return StorageService.instance;
   }
 
+  private async migrateFromLocalStorage() {
+    if (typeof window === 'undefined') return;
+    const migrated = localStorage.getItem('neuro_migrated_to_dexie');
+    if (migrated) return;
+
+    try {
+      // Migrate Notes
+      const notesMetaStr = localStorage.getItem('neuro_notes');
+      if (notesMetaStr) {
+        const notesMeta: HistoryItem[] = JSON.parse(notesMetaStr);
+        for (const meta of notesMeta) {
+          // Try to get content from IDB
+          const content = await new Promise<string>((resolve) => {
+            const request = indexedDB.open('NeuroNoteDB', 1);
+            request.onsuccess = (e: any) => {
+              const idb = e.target.result;
+              if (!idb.objectStoreNames.contains('note_content')) {
+                resolve('');
+                return;
+              }
+              const tx = idb.transaction('note_content', 'readonly');
+              const store = tx.objectStore('note_content');
+              const req = store.get(meta.id);
+              req.onsuccess = () => resolve(req.result || '');
+              req.onerror = () => resolve('');
+            };
+            request.onerror = () => resolve('');
+          });
+          
+          await db.notes.put({ ...meta, content });
+        }
+      }
+
+      // Migrate Folders
+      const foldersStr = localStorage.getItem('neuro_folders');
+      if (foldersStr) {
+        const folders: Folder[] = JSON.parse(foldersStr);
+        await db.folders.bulkPut(folders);
+      }
+
+      // Migrate Templates
+      const templatesStr = localStorage.getItem('neuro_templates');
+      if (templatesStr) {
+        const templates: SavedPrompt[] = JSON.parse(templatesStr);
+        await db.templates.bulkPut(templates);
+      }
+
+      // Migrate Queues
+      const queuesStr = localStorage.getItem('neuro_saved_queues');
+      if (queuesStr) {
+        const queues: SavedQueue[] = JSON.parse(queuesStr);
+        await db.queues.bulkPut(queues);
+      }
+
+      // Migrate KB Sources
+      const kbSourcesStr = localStorage.getItem('neuro_kb_sources');
+      if (kbSourcesStr) {
+        const sources: KnowledgeSource[] = JSON.parse(kbSourcesStr);
+        await db.kbSources.bulkPut(sources);
+        for (const source of sources) {
+          const filesStr = localStorage.getItem(`neuro_kb_files_${source.id}`);
+          if (filesStr) {
+            const files: KnowledgeFile[] = JSON.parse(filesStr);
+            await db.kbFiles.bulkPut(files);
+            localStorage.removeItem(`neuro_kb_files_${source.id}`);
+          }
+        }
+      }
+
+      // Clear localStorage
+      localStorage.removeItem('neuro_notes');
+      localStorage.removeItem('neuro_folders');
+      localStorage.removeItem('neuro_templates');
+      localStorage.removeItem('neuro_saved_queues');
+      localStorage.removeItem('neuro_kb_sources');
+      localStorage.setItem('neuro_migrated_to_dexie', 'true');
+    } catch (e) {
+      console.error("Migration error", e);
+    }
+  }
+
   public initSupabase(url: string, key: string) {
     if (url && key) {
       try {
         this.supabase = createClient(url, key);
-        // Auto-sync on init
-        this.syncWithCloud();
       } catch (e) {
         console.error("Supabase Init Error", e);
       }
@@ -99,65 +118,29 @@ export class StorageService {
     return !!this.supabase;
   }
 
-  // --- NOTES (Hybrid: Metadata in LS, Content in IDB) ---
-  
-  // Helper to strip heavy content for LocalStorage
-  private stripContent(note: HistoryItem): HistoryItem {
-    const snippet = note.content ? note.content.substring(0, 200).replace(/[#*`]/g, '') : "";
-    return { ...note, content: "", snippet }; 
+  // --- NOTES ---
+  public async getLocalNotesMetadata(): Promise<HistoryItem[]> {
+    return await db.notes.filter(n => !n._deleted).toArray();
   }
 
-  // Metadata is fast and synchronous (LocalStorage)
-  public getLocalNotesMetadata(): HistoryItem[] {
-    const data = localStorage.getItem('neuro_notes');
-    return data ? JSON.parse(data) : [];
-  }
-
-  // Content is heavy and asynchronous (IndexedDB)
   public async getNoteContent(id: string): Promise<string> {
-    let content = await this.idb.get(STORE_CONTENT, id);
-    
-    // Fallback: If not in IDB, try Cloud (for synced/cloud notes)
-    if (!content && this.supabase) {
-        try {
-            const { data, error } = await this.supabase
-                .from('neuro_notes')
-                .select('content')
-                .eq('id', id)
-                .single();
-            
-            if (data && data.content) {
-                content = data.content;
-                // Cache to IDB for next time
-                await this.idb.put(STORE_CONTENT, id, content);
-            }
-        } catch (e) {
-            console.warn("Failed to fetch content from cloud fallback", e);
-        }
-    }
-    
-    return content || "";
+    const note = await db.notes.get(id);
+    if (!note || note._deleted) return "";
+    return note.content || "";
   }
 
-  // Returns full notes (Metadata + Content) - Expensive, use carefully
-  public async getUnifiedNotes(forceSync = false): Promise<HistoryItem[]> {
-      if (this.supabase && forceSync) {
-          await this.syncWithCloud();
-      }
-      return this.getLocalNotesMetadata();
+  public async getUnifiedNotes(): Promise<HistoryItem[]> {
+    return await db.notes.filter(n => !n._deleted).toArray();
   }
   
-  // NEW: Get content for multiple IDs (for Context Injection)
   public async getBatchContent(ids: string[]): Promise<Record<string, string>> {
       const results: Record<string, string> = {};
       
-      // 1. Try Local IDB first
-      for (const id of ids) {
-          const content = await this.idb.get(STORE_CONTENT, id);
-          if (content) results[id] = content;
+      const notes = await db.notes.where('id').anyOf(ids).toArray();
+      for (const note of notes) {
+          if (note.content) results[note.id] = note.content;
       }
 
-      // 2. If missing and Cloud ready, try fetch (RAG fallback)
       const missingIds = ids.filter(id => !results[id]);
       if (missingIds.length > 0 && this.supabase) {
           const { data } = await this.supabase
@@ -175,39 +158,26 @@ export class StorageService {
   }
 
   public async saveNoteLocal(note: HistoryItem) {
-    // 1. Save Content to IDB
-    await this.idb.put(STORE_CONTENT, note.id, note.content);
-
-    // 2. Save Metadata to LS
-    const meta = this.getLocalNotesMetadata();
-    const existingIndex = meta.findIndex(n => n.id === note.id);
-    const lightweightNote = this.stripContent({ ...note, _status: note._status || 'local' });
-
-    if (existingIndex >= 0) {
-      meta[existingIndex] = lightweightNote;
-    } else {
-      meta.push(lightweightNote);
-    }
-    localStorage.setItem('neuro_notes', JSON.stringify(meta));
+    await db.notes.put(note);
   }
 
   public async deleteNoteLocal(id: string) {
-    await this.idb.delete(STORE_CONTENT, id);
-    const notes = this.getLocalNotesMetadata().filter(n => n.id !== id);
-    localStorage.setItem('neuro_notes', JSON.stringify(notes));
+    const note = await db.notes.get(id);
+    if (note) {
+      note._deleted = true;
+      note.timestamp = Date.now();
+      note._status = 'local';
+      await db.notes.put(note);
+    }
   }
   
-  // NEW: Dual-Write Rename (Syncs to Cloud if applicable)
   public async renameNote(id: string, newTopic: string) {
-      // 1. Local Update (Optimistic UI)
-      const notes = this.getLocalNotesMetadata();
-      const note = notes.find(n => n.id === id);
+      const note = await db.notes.get(id);
       if (note) {
           note.topic = newTopic;
-          localStorage.setItem('neuro_notes', JSON.stringify(notes));
+          await db.notes.put(note);
       }
 
-      // 2. Cloud Update (Fire & Forget logic or Await based on usage)
       if (note && (note._status === 'synced' || note._status === 'cloud') && this.supabase) {
           const { error } = await this.supabase
               .from('neuro_notes')
@@ -218,99 +188,28 @@ export class StorageService {
       }
   }
 
-  // --- CLOUD SYNC (NEURO_NOTES TABLE) ---
-  
-  public async syncWithCloud(): Promise<void> {
-      if (!this.supabase) return;
-
-      try {
-          // 1. Fetch Cloud Metadata
-          const { data: cloudNotes, error } = await this.supabase
-              .from('neuro_notes')
-              .select('id, timestamp, topic, mode, provider, folder_id, parent_id, tags');
-          
-          if (error) throw error;
-          if (!cloudNotes) return;
-
-          // 2. Merge with Local
-          const localNotes = this.getLocalNotesMetadata();
-          const localMap = new Map(localNotes.map(n => [n.id, n]));
-          let hasChanges = false;
-
-          for (const cNote of cloudNotes) {
-              const local = localMap.get(cNote.id);
-              
-              const mappedCNote: HistoryItem = {
-                  id: cNote.id,
-                  timestamp: cNote.timestamp,
-                  topic: cNote.topic,
-                  mode: cNote.mode,
-                  provider: cNote.provider,
-                  folderId: cNote.folder_id,
-                  parentId: cNote.parent_id,
-                  tags: cNote.tags,
-                  content: '', // Metadata only
-                  _status: 'cloud'
-              };
-
-              if (!local) {
-                  // New from Cloud
-                  localNotes.push(mappedCNote);
-                  hasChanges = true;
-              } else {
-                  // Exists locally. Update status if needed.
-                  if (local._status !== 'synced') {
-                      local._status = 'synced';
-                      hasChanges = true;
-                  }
-                  
-                  // Update metadata if cloud is newer
-                  if (cNote.timestamp > local.timestamp) {
-                      local.timestamp = cNote.timestamp;
-                      local.topic = cNote.topic;
-                      local.mode = cNote.mode;
-                      local.tags = cNote.tags;
-                      local.folderId = cNote.folder_id;
-                      local.parentId = cNote.parent_id;
-                      hasChanges = true;
-                  }
-              }
-          }
-
-          if (hasChanges) {
-              localStorage.setItem('neuro_notes', JSON.stringify(localNotes));
-          }
-
-      } catch (e) {
-          console.error("Sync Error", e);
-      }
-  }
-
+  // --- CLOUD SYNC ---
   public async uploadNoteToCloud(note: HistoryItem) {
       if (!this.supabase) throw new Error("Supabase not connected. Please check Settings.");
       
-      // CRITICAL FIX: Hydrate Content from IDB if missing in the payload
-      // In hybrid mode, the UI often passes metadata objects where content is ""
       let fullContent = note.content;
       if (!fullContent || fullContent.length === 0) {
           fullContent = await this.getNoteContent(note.id);
       }
 
-      // MAPPING: Ensure payload matches 'neuro_notes' table structure exactly
-      // id, timestamp, topic, mode, content, provider, folder_id, parent_id, tags
       const sqlPayload = {
           id: note.id,
-          timestamp: note.timestamp, // BigInt in SQL (compatible with JS Date.now number)
+          timestamp: note.timestamp,
           topic: note.topic,
           mode: note.mode,
-          content: fullContent, // Use validated full content
+          content: fullContent,
           provider: note.provider,
           folder_id: note.folderId || null,
           parent_id: note.parentId || null,
-          tags: note.tags && note.tags.length > 0 ? note.tags : [] // Ensure array for text[]
+          tags: note.tags && note.tags.length > 0 ? note.tags : [],
+          _deleted: note._deleted || false
       };
 
-      // CRITICAL FIX: Add onConflict to prevent "duplicate key" errors on re-sync
       const { data, error } = await this.supabase
         .from('neuro_notes')
         .upsert(sqlPayload, { onConflict: 'id' })
@@ -321,23 +220,19 @@ export class StorageService {
           throw new Error(`Cloud sync failed: ${error.message}`);
       }
       
-      // Update local status to synced only if successful
-      const notes = this.getLocalNotesMetadata();
-      const idx = notes.findIndex(n => n.id === note.id);
-      if (idx >= 0) {
-          notes[idx]._status = 'synced';
-          localStorage.setItem('neuro_notes', JSON.stringify(notes));
+      const localNote = await db.notes.get(note.id);
+      if (localNote) {
+          localNote._status = 'synced';
+          await db.notes.put(localNote);
       }
       return data;
   }
   
-  // NEW: Import/Download from Cloud to Local
   public async importCloudNote(noteMeta: HistoryItem): Promise<void> {
       if (!this.supabase) throw new Error("Supabase not connected.");
 
       let fullContent = noteMeta.content;
 
-      // Fetch full content if not present
       if (!fullContent) {
           const { data, error } = await this.supabase
               .from('neuro_notes')
@@ -349,7 +244,6 @@ export class StorageService {
           fullContent = data.content;
       }
 
-      // Save to local as synced
       const fullNote: HistoryItem = { 
           ...noteMeta, 
           content: fullContent, 
@@ -366,99 +260,111 @@ export class StorageService {
   }
 
   // --- FOLDERS ---
-  public getFolders(): Folder[] {
-    const data = localStorage.getItem('neuro_folders');
-    return data ? JSON.parse(data) : [];
+  public async getFolders(): Promise<Folder[]> {
+    return await db.folders.toArray();
   }
 
-  public saveFolder(folder: Folder) {
-    const folders = this.getFolders();
-    folders.push(folder);
-    localStorage.setItem('neuro_folders', JSON.stringify(folders));
+  public async saveFolder(folder: Folder) {
+    await db.folders.put(folder);
   }
 
   public async deleteFolder(id: string) {
-    const folders = this.getFolders().filter(f => f.id !== id);
-    localStorage.setItem('neuro_folders', JSON.stringify(folders));
+    await db.folders.delete(id);
     
-    // Move notes in this folder to root
-    const notes = this.getLocalNotesMetadata();
-    const notesToUpdate: string[] = [];
-    notes.forEach(n => {
-        if (n.folderId === id) {
-            n.folderId = undefined; // Root
-            if (n._status === 'synced' || n._status === 'cloud') {
-                notesToUpdate.push(n.id);
-            }
-        }
-    });
-    localStorage.setItem('neuro_notes', JSON.stringify(notes));
-
-    if (notesToUpdate.length > 0 && this.supabase) {
-        const { error } = await this.supabase
-            .from('neuro_notes')
-            .update({ folder_id: null })
-            .in('id', notesToUpdate);
-        if (error) console.error("Cloud Folder Delete Move Failed", error);
+    const notes = await db.notes.where('folderId').equals(id).toArray();
+    for (const note of notes) {
+        note.folderId = undefined;
+        await db.notes.put(note);
     }
   }
 
   public async moveNoteToFolder(noteId: string, folderId: string | null) {
-      const notes = this.getLocalNotesMetadata();
-      const note = notes.find(n => n.id === noteId);
+      const note = await db.notes.get(noteId);
       if (note) {
           note.folderId = folderId === 'ROOT' ? undefined : (folderId || undefined);
-          localStorage.setItem('neuro_notes', JSON.stringify(notes));
-
-          if ((note._status === 'synced' || note._status === 'cloud') && this.supabase) {
-              const { error } = await this.supabase
-                  .from('neuro_notes')
-                  .update({ folder_id: note.folderId || null })
-                  .eq('id', noteId);
-              
-              if (error) console.error("Cloud Move Failed", error);
-          }
+          await db.notes.put(note);
       }
   }
 
   // --- TEMPLATES ---
-  public getTemplates(): SavedPrompt[] {
-      const data = localStorage.getItem('neuro_templates');
-      return data ? JSON.parse(data) : [];
+  public async getTemplates(): Promise<SavedPrompt[]> {
+      return await db.templates.toArray();
   }
 
-  public saveTemplate(template: SavedPrompt) {
-      const templates = this.getTemplates();
-      templates.push(template);
-      localStorage.setItem('neuro_templates', JSON.stringify(templates));
+  public async saveTemplate(template: SavedPrompt) {
+      await db.templates.put(template);
   }
 
-  public deleteTemplate(id: string) {
-      const templates = this.getTemplates().filter(t => t.id !== id);
-      localStorage.setItem('neuro_templates', JSON.stringify(templates));
+  public async deleteTemplate(id: string) {
+      await db.templates.delete(id);
   }
 
   // --- QUEUES ---
   public async getQueues(): Promise<SavedQueue[]> {
-     const data = localStorage.getItem('neuro_saved_queues');
-     return data ? JSON.parse(data) : [];
+     return await db.queues.toArray();
   }
 
   public async saveQueue(queue: SavedQueue) {
-      const queues = await this.getQueues();
-      const idx = queues.findIndex(q => q.id === queue.id);
-      if (idx >= 0) queues[idx] = queue;
-      else queues.push(queue);
-      localStorage.setItem('neuro_saved_queues', JSON.stringify(queues));
+      await db.queues.put(queue);
   }
 
   public async deleteQueue(id: string) {
-      const queues = await this.getQueues();
-      const filtered = queues.filter(q => q.id !== id);
-      localStorage.setItem('neuro_saved_queues', JSON.stringify(filtered));
+      await db.queues.delete(id);
   }
 
-  // --- LIBRARY MATERIALS (Cloud - library_materials Table) ---
+  // --- KNOWLEDGE BASE ---
+  public async getKnowledgeSources(): Promise<KnowledgeSource[]> {
+      return await db.kbSources.toArray();
+  }
+
+  public async saveKnowledgeSource(source: KnowledgeSource) {
+      await db.kbSources.put(source);
+  }
+
+  public async deleteKnowledgeSource(id: string) {
+      await db.kbSources.delete(id);
+      
+      const files = await db.kbFiles.where('sourceId').equals(id).toArray();
+      for (const file of files) {
+          if (file.fileId) {
+              await this.fileStorage.deleteFile(file.fileId);
+          }
+          await db.kbFiles.delete(file.id);
+      }
+  }
+
+  public async getKnowledgeFilesMeta(sourceId: string): Promise<KnowledgeFile[]> {
+      return await db.kbFiles.where('sourceId').equals(sourceId).toArray();
+  }
+
+  public async getKnowledgeFileContent(fileId: string): Promise<string> {
+      return await this.fileStorage.getFileAsBase64(fileId);
+  }
+
+  public async saveKnowledgeFiles(sourceId: string, files: KnowledgeFile[]) {
+      for (const f of files) {
+          const { data, ...meta } = f;
+          meta.sourceId = sourceId;
+          await db.kbFiles.put(meta);
+      }
+  }
+
+  public async connectNotes(idA: string, idB: string) {
+      const noteA = await db.notes.get(idA);
+      const noteB = await db.notes.get(idB);
+      if (noteA && noteB) {
+          const linkTagA = `link:${idB}`;
+          const linkTagB = `link:${idA}`;
+          if (!noteA.tags) noteA.tags = [];
+          if (!noteA.tags.includes(linkTagA)) noteA.tags.push(linkTagA);
+          if (!noteB.tags) noteB.tags = [];
+          if (!noteB.tags.includes(linkTagB)) noteB.tags.push(linkTagB);
+          await db.notes.put(noteA);
+          await db.notes.put(noteB);
+      }
+  }
+
+  // --- LIBRARY MATERIALS ---
   public async getLibraryMaterials(): Promise<LibraryMaterial[]> {
     if (!this.supabase) throw new Error("Supabase not connected");
     const { data, error } = await this.supabase
@@ -472,19 +378,16 @@ export class StorageService {
   public async saveLibraryMaterial(material: LibraryMaterial) {
     if (!this.supabase) throw new Error("Supabase not connected");
     
-    // MAPPING: Ensure payload matches 'library_materials' schema
-    // id, created_at (auto), title, content, processed_content, file_type, tags, size
     const payload = {
         id: material.id,
         title: material.title,
-        content: material.content, // Base64
+        content: material.content,
         processed_content: material.processed_content || null,
         file_type: material.file_type,
         tags: material.tags && material.tags.length > 0 ? material.tags : [],
         size: material.size || 0
     };
 
-    // CRITICAL FIX: Add onConflict to upsert
     const { error } = await this.supabase
       .from('library_materials')
       .upsert(payload, { onConflict: 'id' });
@@ -504,3 +407,4 @@ export class StorageService {
     if (error) throw error;
   }
 }
+

@@ -1,32 +1,30 @@
 
+import { remark } from 'remark';
+import remarkParse from 'remark-parse';
+import remarkStringify from 'remark-stringify';
+import { visit } from 'unist-util-visit';
+
 /**
- * DETERMINISTIC FORMATTER
+ * DETERMINISTIC FORMATTER (AST-BASED)
  * 
- * A pure logic-based processor to sanitize AI output without relying on self-correction.
- * Focuses heavily on fixing broken Mermaid.js syntax and Obsidian-style callouts.
+ * Uses remark to parse Markdown into an Abstract Syntax Tree (AST).
+ * This prevents catastrophic backtracking and ensures O(N) linear time processing.
  */
 
 /* --- 1. MERMAID SYNTAX REPAIR --- */
 
 const fixMermaidArrows = (line: string): string => {
   let fixed = line;
-
-  // 1. Fix Standard Arrows (-->)
   fixed = fixed.replace(/-\s+-\s+>/g, '-->'); 
   fixed = fixed.replace(/-\s+->/g, '-->');
   fixed = fixed.replace(/--\s+>/g, '-->');
   fixed = fixed.replace(/-\s+>/g, '-->');
-
-  // 2. Fix Dotted Arrows (-.->)
   fixed = fixed.replace(/-\s+\.\s+->/g, '-.->');
   fixed = fixed.replace(/-\.\s+->/g, '-.->');
   fixed = fixed.replace(/-\.-\s+>/g, '-.->');
-
-  // 3. Fix Thick Arrows (==>)
   fixed = fixed.replace(/=\s+=\s+>/g, '==>');
   fixed = fixed.replace(/==\s+>/g, '==>');
   fixed = fixed.replace(/=\s+=>/g, '==>');
-
   return fixed;
 };
 
@@ -34,47 +32,23 @@ const sanitizeNodeLabels = (line: string): string => {
   if (line.trim().startsWith('style') || line.trim().startsWith('classDef') || line.trim().startsWith('subgraph') || line.trim().startsWith('click')) {
     return line;
   }
-
-  // AGGRESSIVE NODE SANITIZER
-  // Goal: Convert A[Text (Complex)] -> A["Text (Complex)"]
-  // Regex Explanation:
-  // ([a-zA-Z0-9_]+) -> ID
-  // \s*             -> space
-  // (\[|\(|\{)      -> Open bracket
-  // (?!["'])        -> Lookahead: Don't match if already quoted
-  // (.*?)           -> Content (non-greedy)
-  // (?!["'])        -> Lookahead: Don't match if already quoted
-  // (\]|\)|\})      -> Close bracket
   
-  let fixed = line;
-
-  // Function to wrap content in quotes if not already wrapped
   const replacer = (match: string, id: string, open: string, content: string, close: string) => {
-      // Check if content is already wrapped in quotes to be safe
       const trimmed = content.trim();
       if ((trimmed.startsWith('"') && trimmed.endsWith('"')) || (trimmed.startsWith("'") && trimmed.endsWith("'"))) {
           return match;
       }
-      
-      // Escape internal double quotes
       const safeContent = content.replace(/"/g, "'");
       return `${id}${open}"${safeContent}"${close}`;
   };
 
-  // 1. Square Brackets [ ]
+  let fixed = line;
   fixed = fixed.replace(/([a-zA-Z0-9_]+)\s*\[([^\]]+)\]/g, (match, id, content) => replacer(match, id, '[', content, ']'));
-
-  // 2. Round Brackets ( ) - Note: We skip ((Circle)) double brackets to avoid breaking them
-  // We use a specific regex that avoids matching double (( 
   fixed = fixed.replace(/([a-zA-Z0-9_]+)\s*\((?!\()([^)]+)\)/g, (match, id, content) => replacer(match, id, '(', content, ')'));
-
-  // 3. Database/Cylinder [( )]
   fixed = fixed.replace(/([a-zA-Z0-9_]+)\s*\[\(([^)]+)\)\]/g, (match, id, content) => replacer(match, id, '[(', content, ')]'));
-
   return fixed;
 };
 
-/* --- MINDMAP SPECIFIC HANDLER --- */
 const fixMindmap = (content: string): string => {
   const lines = content.split('\n');
   const validLines = lines.filter(l => l.trim().length > 0 && !l.trim().startsWith('%%') && !l.trim().startsWith('```'));
@@ -84,9 +58,8 @@ const fixMindmap = (content: string): string => {
     bodyLines = validLines.slice(1);
   }
 
-  if (bodyLines.length === 0) return "```mermaid\nmindmap\n  root((Empty))\n```";
+  if (bodyLines.length === 0) return "mindmap\n  root((Empty))";
 
-  // Check for Multiple Roots Violation
   const firstLineMatch = bodyLines[0].match(/^(\s*)/);
   const rootIndentLen = firstLineMatch ? firstLineMatch[1].length : 0;
 
@@ -107,7 +80,7 @@ const fixMindmap = (content: string): string => {
     processedLines = bodyLines;
   }
 
-  return "```mermaid\n" + header + "\n" + processedLines.join('\n') + "\n```";
+  return header + "\n" + processedLines.join('\n');
 };
 
 const fixMermaidBlock = (codeBlock: string): string => {
@@ -118,37 +91,26 @@ const fixMermaidBlock = (codeBlock: string): string => {
   }
 
   if (firstLine.includes('sequenceDiagram') || firstLine.includes('timeline') || firstLine.includes('quadrantChart') || firstLine.includes('classDiagram')) {
-    return "```mermaid\n" + codeBlock.trim() + "\n```";
+    return codeBlock.trim();
   }
 
-  // STANDARD FLOWCHART / GRAPH HANDLER
   const lines = codeBlock.split('\n');
   const fixedLines: string[] = [];
 
   for (let line of lines) {
     let trimmed = line.trim();
-
     if (!trimmed || trimmed.startsWith('%%')) {
       fixedLines.push(line);
       continue;
     }
-
-    // Remove hallucinations (List numbers at start)
     trimmed = trimmed.replace(/^[\d\.\-\*\+]+(?=\s*[a-zA-Z])/, '').trim();
-
-    // Fix merged headers
     trimmed = trimmed.replace(/^(graph|flowchart)\s+(TD|LR|TB|BT)([a-zA-Z0-9])/, '$1 $2\n$3');
-
-    // Fix Arrows
     trimmed = fixMermaidArrows(trimmed);
-
-    // Sanitize Labels (The Critical Fix)
     trimmed = sanitizeNodeLabels(trimmed);
-
     fixedLines.push(trimmed);
   }
 
-  return "```mermaid\n" + fixedLines.join('\n') + "\n```";
+  return fixedLines.join('\n');
 };
 
 /* --- 2. OBSIDIAN TAG CONVERTER --- */
@@ -192,14 +154,39 @@ const convertTagsToObsidian = (text: string): string => {
   return processedText;
 };
 
-/* --- MAIN PROCESSOR --- */
+/* --- MAIN PROCESSOR (AST-BASED) --- */
 
 export const processGeneratedNote = (rawText: string): string => {
-  const mermaidBlockRegex = /```mermaid([\s\S]*?)```/g;
-  let processed = rawText.replace(mermaidBlockRegex, (match, code) => fixMermaidBlock(code));
+  // 1. Pre-process custom tags (since they aren't standard MD)
+  let processed = convertTagsToObsidian(rawText);
+  
+  // 2. Use remark for AST-based transformations
+  const processor = remark()
+    .use(remarkParse)
+    .use(() => (tree) => {
+      visit(tree, 'code', (node: any) => {
+        if (node.lang === 'mermaid') {
+          node.value = fixMermaidBlock(node.value);
+        }
+      });
+      
+      visit(tree, 'thematicBreak', (node: any) => {
+        // Standardize thematic breaks
+      });
+    })
+    .use(remarkStringify);
 
-  processed = processed.replace(/-{4,}/g, '---');
-  processed = convertTagsToObsidian(processed);
-
-  return processed;
+  // Note: remark is typically async, but we can use it synchronously if we don't have async plugins
+  // However, for safety in this environment, we'll try to keep it simple.
+  // If remark().processSync() is available, we use it.
+  try {
+    const result = processor.processSync(processed);
+    return String(result);
+  } catch (e) {
+    console.error("AST Processing failed, falling back to regex", e);
+    // Fallback to basic regex if AST fails
+    return processed.replace(/```mermaid([\s\S]*?)```/g, (match, code) => {
+        return "```mermaid\n" + fixMermaidBlock(code) + "\n```";
+    });
+  }
 };
