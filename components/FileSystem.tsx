@@ -1,7 +1,5 @@
 
 import React, { useState, useEffect, useCallback, useMemo, useRef } from 'react';
-import { useLiveQuery } from 'dexie-react-hooks';
-import { db } from '../db';
 import { HistoryItem, Folder } from '../types';
 import { StorageService } from '../services/storageService';
 import { NotificationService } from '../services/notificationService';
@@ -18,8 +16,8 @@ interface FileSystemProps {
 }
 
 const FileSystem: React.FC<FileSystemProps> = ({ onSelectNote, activeNoteId }) => {
-  const notes = useLiveQuery(() => db.notes.filter(n => !n._deleted).toArray(), []) || [];
-  const folders = useLiveQuery(() => db.folders.toArray(), []) || [];
+  const [notes, setNotes] = useState<HistoryItem[]>([]);
+  const [folders, setFolders] = useState<Folder[]>([]);
   const [loading, setLoading] = useState(false);
   const [searchQuery, setSearchQuery] = useState('');
   const [storage] = useState(StorageService.getInstance());
@@ -32,14 +30,35 @@ const FileSystem: React.FC<FileSystemProps> = ({ onSelectNote, activeNoteId }) =
   const [expandedFolders, setExpandedFolders] = useState<Record<string, boolean>>({});
   const [collapsedGroups, setCollapsedGroups] = useState<Record<string, boolean>>({}); 
   const [activeMenuId, setActiveMenuId] = useState<string | null>(null); 
-  
+
   // Drag & Drop State
   const [draggedNoteId, setDraggedNoteId] = useState<string | null>(null);
   const [dragOverFolderId, setDragOverFolderId] = useState<string | null>(null);
 
   const menuRef = useRef<HTMLDivElement>(null);
 
+  // --- CORE: DATA LOADER (OPTIMIZED) ---
+  const refreshData = useCallback(async (forceSync = false) => {
+    setLoading(true);
+    try {
+        // PERF FIX: Load metadata ONLY. Do not load full content strings into the list view.
+        // UPDATED: Use getUnifiedNotes to trigger Cloud Sync if connected
+        const n = await storage.getUnifiedNotes(forceSync);
+        n.sort((a, b) => b.timestamp - a.timestamp);
+        setNotes([...n]);
+        
+        const f = storage.getFolders();
+        setFolders(f);
+    } catch (e) {
+        console.error("FileSystem Load Error", e);
+    } finally {
+        setLoading(false);
+    }
+  }, [storage]);
+
   useEffect(() => {
+    refreshData(true); // Force sync on initial mount
+    
     const handleClickOutside = (event: MouseEvent) => {
       if (menuRef.current && !menuRef.current.contains(event.target as Node)) {
         setActiveMenuId(null);
@@ -47,7 +66,7 @@ const FileSystem: React.FC<FileSystemProps> = ({ onSelectNote, activeNoteId }) =
     };
     document.addEventListener('mousedown', handleClickOutside);
     return () => document.removeEventListener('mousedown', handleClickOutside);
-  }, []);
+  }, [refreshData]);
 
   // --- ACTIONS ---
   const handleDeleteNote = async (note: HistoryItem) => {
@@ -55,6 +74,7 @@ const FileSystem: React.FC<FileSystemProps> = ({ onSelectNote, activeNoteId }) =
       try {
           if (note._status === 'cloud' || note._status === 'synced') await storage.deleteNoteFromCloud(note.id);
           if (note._status === 'local' || note._status === 'synced') await storage.deleteNoteLocal(note.id);
+          refreshData();
       } catch(err) { alert("Error deleting note."); }
     }
   };
@@ -63,30 +83,34 @@ const FileSystem: React.FC<FileSystemProps> = ({ onSelectNote, activeNoteId }) =
     const newName = prompt("Rename Topic:", current);
     if (newName && newName.trim()) {
        await storage.renameNote(id, newName.trim());
+       refreshData();
     }
   };
 
-  const handleCreateFolder = async () => {
+  const handleCreateFolder = () => {
     const name = prompt("New Folder Name:");
     if (name && name.trim()) {
       const newFolder: Folder = { id: Date.now().toString(), name: name.trim(), timestamp: Date.now() };
-      await storage.saveFolder(newFolder);
+      storage.saveFolder(newFolder);
       setExpandedFolders(prev => ({...prev, [newFolder.id]: true}));
+      refreshData();
     }
   };
 
   const handleDeleteFolder = async (id: string) => {
     if (confirm("Delete folder? Notes inside will be moved to root.")) {
       await storage.deleteFolder(id);
+      refreshData();
     }
   };
 
   const handleDrop = async (targetFolderId: string | null) => {
       if (draggedNoteId) {
           await storage.moveNoteToFolder(draggedNoteId, targetFolderId);
+          refreshData();
           setDraggedNoteId(null);
           setDragOverFolderId(null);
-          if (targetFolderId) setExpandedFolders(prev => ({...prev, [targetFolderId]: true}));
+          if (targetFolderId && targetFolderId !== 'ROOT') setExpandedFolders(prev => ({...prev, [targetFolderId]: true}));
       }
   };
   
@@ -94,6 +118,7 @@ const FileSystem: React.FC<FileSystemProps> = ({ onSelectNote, activeNoteId }) =
       try {
           await storage.uploadNoteToCloud(note);
           notifications.send("Sync Complete", `Uploaded "${note.topic}" to Cloud.`, "sync-success");
+          refreshData();
       } catch(e: any) {
           alert("Upload failed: " + e.message);
       }
@@ -142,6 +167,12 @@ const FileSystem: React.FC<FileSystemProps> = ({ onSelectNote, activeNoteId }) =
   }, [notes, activeTab, searchQuery]);
 
 
+  const handleMoveNote = async (noteId: string, folderId: string | null) => {
+      await storage.moveNoteToFolder(noteId, folderId);
+      refreshData();
+      if (folderId && folderId !== 'ROOT') setExpandedFolders(prev => ({...prev, [folderId]: true}));
+  };
+
   // --- SUB-COMPONENT: NOTE ROW ---
   const NoteRow: React.FC<{ note: HistoryItem; depth?: number }> = React.memo(({ note, depth = 0 }) => {
       const isActive = activeNoteId === note.id;
@@ -178,8 +209,34 @@ const FileSystem: React.FC<FileSystemProps> = ({ onSelectNote, activeNoteId }) =
 
               {/* POPUP MENU */}
               {activeMenuId === note.id && (
-                  <div ref={menuRef} className="absolute right-2 z-50 w-32 bg-[var(--ui-surface)] border border-[var(--ui-border)] shadow-xl rounded-lg overflow-hidden animate-fade-in flex flex-col py-1">
+                  <div ref={menuRef} className="absolute right-2 z-50 w-40 bg-[var(--ui-surface)] border border-[var(--ui-border)] shadow-xl rounded-lg overflow-hidden animate-fade-in flex flex-col py-1">
                       <button onClick={(e) => { e.stopPropagation(); handleRenameNote(note.id, note.topic); setActiveMenuId(null); }} className="px-3 py-2 text-left text-[10px] hover:bg-[var(--ui-bg)] flex items-center gap-2 text-[var(--ui-text-main)]"><Edit2 size={10}/> Rename</button>
+                      
+                      {/* Move To Submenu */}
+                      <div className="relative group/move">
+                          <button className="w-full px-3 py-2 text-left text-[10px] hover:bg-[var(--ui-bg)] flex items-center justify-between text-[var(--ui-text-main)]">
+                              <span className="flex items-center gap-2"><CornerDownRight size={10}/> Move To...</span>
+                              <ChevronRight size={10}/>
+                          </button>
+                          <div className="absolute left-full top-0 ml-1 w-32 bg-[var(--ui-surface)] border border-[var(--ui-border)] shadow-xl rounded-lg overflow-hidden hidden group-hover/move:flex flex-col py-1 z-50">
+                              <button 
+                                  onClick={(e) => { e.stopPropagation(); handleMoveNote(note.id, null); setActiveMenuId(null); }} 
+                                  className="px-3 py-2 text-left text-[10px] hover:bg-[var(--ui-bg)] text-[var(--ui-text-main)] truncate"
+                              >
+                                  [Root]
+                              </button>
+                              {folders.map(f => (
+                                  <button 
+                                      key={f.id}
+                                      onClick={(e) => { e.stopPropagation(); handleMoveNote(note.id, f.id); setActiveMenuId(null); }} 
+                                      className="px-3 py-2 text-left text-[10px] hover:bg-[var(--ui-bg)] text-[var(--ui-text-main)] truncate"
+                                  >
+                                      {f.name}
+                                  </button>
+                              ))}
+                          </div>
+                      </div>
+
                       {note._status === 'local' && <button onClick={(e) => { e.stopPropagation(); handleCloudUpload(note); setActiveMenuId(null); }} className="px-3 py-2 text-left text-[10px] hover:bg-[var(--ui-bg)] flex items-center gap-2 text-cyan-500"><UploadCloud size={10}/> Upload Cloud</button>}
                       <div className="h-[1px] bg-[var(--ui-border)] my-1"></div>
                       <button onClick={(e) => { e.stopPropagation(); handleDeleteNote(note); setActiveMenuId(null); }} className="px-3 py-2 text-left text-[10px] hover:bg-[var(--ui-bg)] flex items-center gap-2 text-red-400"><Trash2 size={10}/> Delete</button>
@@ -197,7 +254,7 @@ const FileSystem: React.FC<FileSystemProps> = ({ onSelectNote, activeNoteId }) =
             <span className="text-[10px] font-bold text-[var(--ui-text-muted)] uppercase tracking-widest">Explorer</span>
             <div className="flex gap-1">
                 <button onClick={handleCreateFolder} className="p-1.5 hover:bg-[var(--ui-bg)] rounded text-[var(--ui-text-muted)] hover:text-[var(--ui-text-main)]" title="New Folder"><FolderPlus size={14}/></button>
-                <button onClick={() => {}} className="p-1.5 hover:bg-[var(--ui-bg)] rounded text-[var(--ui-text-muted)] hover:text-[var(--ui-text-main)]" title="Refresh"><RefreshCw size={14} className={loading ? 'animate-spin' : ''}/></button>
+                <button onClick={() => refreshData(true)} className="p-1.5 hover:bg-[var(--ui-bg)] rounded text-[var(--ui-text-muted)] hover:text-[var(--ui-text-main)]" title="Refresh"><RefreshCw size={14} className={loading ? 'animate-spin' : ''}/></button>
             </div>
          </div>
          

@@ -1,7 +1,5 @@
 
-import React, { useState } from 'react';
-import { useLiveQuery } from 'dexie-react-hooks';
-import { db } from '../db';
+import React, { useState, useEffect } from 'react';
 import { HistoryItem, NoteMode } from '../types';
 import { StorageService } from '../services/storageService';
 import { NotificationService } from '../services/notificationService';
@@ -18,7 +16,7 @@ interface NeuralVaultProps {
 }
 
 const NeuralVault: React.FC<NeuralVaultProps> = ({ onSelectNote, onImportCloud }) => {
-  const notes = useLiveQuery(() => db.notes.filter(n => !n._deleted).toArray(), []) || [];
+  const [notes, setNotes] = useState<HistoryItem[]>([]);
   const [loading, setLoading] = useState(false);
   const [search, setSearch] = useState('');
   const [storage] = useState(StorageService.getInstance());
@@ -29,6 +27,22 @@ const NeuralVault: React.FC<NeuralVaultProps> = ({ onSelectNote, onImportCloud }
   const [activeTag, setActiveTag] = useState<string | null>(null);
   const [viewMode, setViewMode] = useState<'grid' | 'list'>('grid');
 
+  const loadVault = async () => {
+    setLoading(true);
+    try {
+        const unified = await storage.getUnifiedNotes(true);
+        setNotes(unified);
+    } catch (e) {
+        console.error("Vault Load Error", e);
+    } finally {
+        setLoading(false);
+    }
+  };
+
+  useEffect(() => {
+    loadVault();
+  }, []);
+
   const handleDelete = async (note: HistoryItem, e: React.MouseEvent) => {
     e.stopPropagation();
     if (!confirm(`Permanently delete "${note.topic}"? This cannot be undone.`)) return;
@@ -38,8 +52,9 @@ const NeuralVault: React.FC<NeuralVaultProps> = ({ onSelectNote, onImportCloud }
             await storage.deleteNoteFromCloud(note.id);
         }
         if (note._status === 'local' || note._status === 'synced') {
-            await storage.deleteNoteLocal(note.id);
+            storage.deleteNoteLocal(note.id);
         }
+        loadVault();
     } catch (e) {
         alert("Delete failed");
     }
@@ -51,6 +66,7 @@ const NeuralVault: React.FC<NeuralVaultProps> = ({ onSelectNote, onImportCloud }
       try {
           await storage.uploadNoteToCloud(note);
           notifications.send("Upload Success", `${note.topic} synced to cloud.`, "cloud-success");
+          loadVault(); // Refresh status
       } catch (e: any) { alert(e.message); }
   };
   
@@ -60,6 +76,7 @@ const NeuralVault: React.FC<NeuralVaultProps> = ({ onSelectNote, onImportCloud }
       try {
           await storage.importCloudNote(note);
           notifications.send("Import Success", `${note.topic} downloaded to local storage.`, "download-success");
+          loadVault(); // Refresh status to synced
       } catch (e: any) {
           alert("Import failed: " + e.message);
       }
@@ -103,7 +120,7 @@ const NeuralVault: React.FC<NeuralVaultProps> = ({ onSelectNote, onImportCloud }
                     <button onClick={() => setViewMode('grid')} className={`p-1.5 rounded ${viewMode === 'grid' ? 'bg-gray-700 text-white' : 'text-gray-500'}`}><LayoutGrid size={14}/></button>
                     <button onClick={() => setViewMode('list')} className={`p-1.5 rounded ${viewMode === 'list' ? 'bg-gray-700 text-white' : 'text-gray-500'}`}><ListIcon size={14}/></button>
                 </div>
-                <button onClick={() => {}} className="p-2 hover:bg-gray-800 rounded-lg text-gray-400 hover:text-white"><RefreshCw size={16}/></button>
+                <button onClick={loadVault} className="p-2 hover:bg-gray-800 rounded-lg text-gray-400 hover:text-white"><RefreshCw size={16}/></button>
             </div>
 
             <div className="flex items-center gap-2 w-full md:w-auto overflow-x-auto pb-2 md:pb-0 scrollbar-hide">
@@ -195,7 +212,7 @@ const NeuralVault: React.FC<NeuralVaultProps> = ({ onSelectNote, onImportCloud }
                             
                             <h3 className="font-bold text-white mb-1 truncate">{note.topic}</h3>
                             <p className="text-xs text-gray-500 line-clamp-2 mb-3 h-8">
-                                {note.content ? note.content.substring(0, 150).replace(/[#*`]/g, '') : "Content available in cloud..."}
+                                {note.snippet || (note.content ? note.content.substring(0, 150).replace(/[#*`]/g, '') : "Content available in cloud...")}
                             </p>
                             
                             <div className="flex justify-between items-center text-[10px] text-gray-600">

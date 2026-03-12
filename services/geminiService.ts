@@ -1,11 +1,8 @@
 
-import { GoogleGenAI, Type } from "@google/genai";
+import { GoogleGenAI } from "@google/genai";
 import { GenerationConfig, UploadedFile, SyllabusItem, ChatMessage, NoteMode } from '../types';
 import { getStrictPrompt, UNIVERSAL_STRUCTURE_PROMPT } from '../utils/prompts';
 import { processGeneratedNote } from '../utils/formatter';
-import { safeParseArray } from '../utils/jsonUtils';
-
-import { connectionManager } from './AIConnectionManager';
 
 // Helper to get authenticated AI instance with Key Rotation
 const getAIClient = (config: GenerationConfig) => {
@@ -18,15 +15,17 @@ const getAIClient = (config: GenerationConfig) => {
   }
 
   // KEY ROTATION LOGIC
-  let keys = [apiKey];
+  // Support comma-separated or newline-separated keys
   if (apiKey.includes(',') || apiKey.includes('\n')) {
-      keys = apiKey.split(/[\n,]+/).map(k => k.trim()).filter(k => k.length > 0);
+      const keys = apiKey.split(/[\n,]+/).map(k => k.trim()).filter(k => k.length > 0);
+      if (keys.length > 0) {
+          // Pick a random key for simple load balancing
+          const randomIndex = Math.floor(Math.random() * keys.length);
+          apiKey = keys[randomIndex];
+      }
   }
-  
-  connectionManager.setKeys(keys);
-  const activeKey = connectionManager.getKey();
 
-  return { ai: new GoogleGenAI({ apiKey: activeKey }), activeKey };
+  return new GoogleGenAI({ apiKey });
 };
 
 // --- BATCH GENERATOR FOR COMPREHENSIVE MODE ---
@@ -36,8 +35,7 @@ const generateBatchSection = async (
   topic: string,
   sectionTitle: string,
   sectionContext: string, // New: Pass sub-bullets as context
-  files: UploadedFile[],
-  activeKey: string
+  files: UploadedFile[]
 ): Promise<string> => {
   
   // AGGRESSIVE ACADEMIC PROMPT
@@ -73,21 +71,14 @@ const generateBatchSection = async (
       files.forEach(f => parts.push({ inlineData: { mimeType: f.mimeType, data: f.data } }));
   }
 
-  try {
-    // Use higher token limit and slightly lower temp for academic precision
-    const response = await ai.models.generateContent({
-        model: config.model, // Recommend Gemini 1.5 Pro or 2.5 Pro for this
-        contents: { parts },
-        config: { temperature: 0.2, maxOutputTokens: 8192 } 
-    });
-    
-    return response.text || `(Failed to generate ${sectionTitle})`;
-  } catch (error: any) {
-    const statusMatch = error.message?.match(/\[(\d{3})\]/);
-    const status = statusMatch ? parseInt(statusMatch[1]) : 500;
-    connectionManager.reportError(activeKey, status);
-    throw error;
-  }
+  // Use higher token limit and slightly lower temp for academic precision
+  const response = await ai.models.generateContent({
+      model: config.model, // Recommend Gemini 1.5 Pro or 2.5 Pro for this
+      contents: { parts },
+      config: { temperature: 0.2, maxOutputTokens: 8192 } 
+  });
+  
+  return response.text || `(Failed to generate ${sectionTitle})`;
 };
 
 export const generateNoteContent = async (
@@ -99,7 +90,7 @@ export const generateNoteContent = async (
 ): Promise<string> => {
   
   onProgress("Checking configurations...");
-  const { ai, activeKey } = getAIClient(config);
+  const ai = getAIClient(config);
   const modelName = config.model;
 
   onProgress(`Connecting to ${modelName} in ${config.mode.toUpperCase()} mode...`);
@@ -144,8 +135,7 @@ export const generateNoteContent = async (
                            topic, 
                            sectionTitle, 
                            sectionContext || "Cover all standard aspects of this sub-topic.", 
-                           files,
-                           activeKey
+                           files
                        );
                    } catch (err) {
                        attempts++;
@@ -215,23 +205,11 @@ export const generateNoteContent = async (
 
   } catch (error: any) {
     console.error("Gemini API Error:", error);
-    
-    // Extract status code if possible
-    const statusMatch = error.message?.match(/\[(\d{3})\]/);
-    let status = statusMatch ? parseInt(statusMatch[1]) : 500;
-    if (error.message?.includes("429")) status = 429;
-    if (error.message?.includes("503")) status = 503;
-    if (error.message?.includes("401")) status = 401;
-    if (error.message?.includes("403")) status = 403;
-    if (error.message?.includes("404")) status = 404;
-    
-    connectionManager.reportError(activeKey, status);
-
-    if (status === 429) {
+    if (error.message?.includes("429")) {
       throw new Error("Quota Exceeded (429). Please wait a moment or rotate keys.");
     }
     // Handle 404 specifically for clearer UX
-    if (status === 404) {
+    if (error.message?.includes("404")) {
        throw new Error(`Model not found (404). The model '${config.model}' may not be available in your account/region or the API Key is invalid.`);
     }
     throw error;
@@ -246,7 +224,7 @@ export const generateDetailedStructure = async (
   config: GenerationConfig,
   topic: string
 ): Promise<string> => {
-  const { ai, activeKey } = getAIClient(config);
+  const ai = getAIClient(config);
   // Use config.structureModel if available, else standard config.model
   const modelName = config.structureModel || (config.model.includes('gemini') ? config.model : 'gemini-3-flash-preview');
 
@@ -264,9 +242,6 @@ export const generateDetailedStructure = async (
     return response.text || "";
   } catch (e: any) {
     console.error("Structure Auto-Gen Error", e);
-    const statusMatch = e.message?.match(/\[(\d{3})\]/);
-    const status = statusMatch ? parseInt(statusMatch[1]) : 500;
-    connectionManager.reportError(activeKey, status);
     throw new Error("Failed to auto-generate structure: " + e.message);
   }
 };
@@ -285,7 +260,7 @@ export const parseSyllabusToTopics = async (
   config: GenerationConfig,
   file: UploadedFile
 ): Promise<SyllabusItem[]> => {
-  const { ai, activeKey } = getAIClient(config);
+  const ai = getAIClient(config);
   // Use config.model if it seems valid for Gemini
   const modelName = config.model.includes('gemini') ? config.model : 'gemini-3-flash-preview';
 
@@ -305,16 +280,13 @@ export const parseSyllabusToTopics = async (
       },
       config: {
         temperature: 0.2, 
-        responseMimeType: "application/json",
-        responseSchema: {
-          type: Type.ARRAY,
-          items: { type: Type.STRING }
-        }
+        responseMimeType: "application/json"
       }
     });
 
     const text = response.text || "[]";
-    const topics = safeParseArray<string>(text);
+    const cleanJson = text.replace(/```json/g, '').replace(/```/g, '').trim();
+    const topics: string[] = JSON.parse(cleanJson);
 
     return topics.map((t, index) => ({
       id: `topic-${Date.now()}-${index}`,
@@ -324,9 +296,6 @@ export const parseSyllabusToTopics = async (
 
   } catch (e: any) {
     console.error("Syllabus Parsing Error", e);
-    const statusMatch = e.message?.match(/\[(\d{3})\]/);
-    const status = statusMatch ? parseInt(statusMatch[1]) : 500;
-    connectionManager.reportError(activeKey, status);
     throw new Error("Failed to parse syllabus file.");
   }
 };
@@ -335,7 +304,7 @@ export const parseSyllabusFromText = async (
   config: GenerationConfig,
   rawText: string
 ): Promise<SyllabusItem[]> => {
-  const { ai, activeKey } = getAIClient(config);
+  const ai = getAIClient(config);
   const modelName = config.model.includes('gemini') ? config.model : 'gemini-3-flash-preview';
 
   try {
@@ -346,16 +315,13 @@ export const parseSyllabusFromText = async (
       },
       config: {
         temperature: 0.2, 
-        responseMimeType: "application/json",
-        responseSchema: {
-          type: Type.ARRAY,
-          items: { type: Type.STRING }
-        }
+        responseMimeType: "application/json"
       }
     });
 
     const text = response.text || "[]";
-    const topics = safeParseArray<string>(text);
+    const cleanJson = text.replace(/```json/g, '').replace(/```/g, '').trim();
+    const topics: string[] = JSON.parse(cleanJson);
 
     return topics.map((t, index) => ({
       id: `topic-${Date.now()}-${index}`,
@@ -365,9 +331,6 @@ export const parseSyllabusFromText = async (
 
   } catch (e: any) {
     console.error("Syllabus Text Parsing Error", e);
-    const statusMatch = e.message?.match(/\[(\d{3})\]/);
-    const status = statusMatch ? parseInt(statusMatch[1]) : 500;
-    connectionManager.reportError(activeKey, status);
     throw new Error("Failed to parse syllabus text.");
   }
 };
@@ -381,7 +344,7 @@ export const refineNoteContent = async (
   currentContent: string,
   instruction: string
 ): Promise<string> => {
-  const { ai, activeKey } = getAIClient(config);
+  const ai = getAIClient(config);
   // Use currently selected model
   const modelName = config.model.includes('gemini') ? config.model : 'gemini-3-flash-preview';
 
@@ -413,10 +376,66 @@ export const refineNoteContent = async (
       return processGeneratedNote(text);
   } catch (e: any) {
       console.error("Gemini Refinement Error", e);
-      const statusMatch = e.message?.match(/\[(\d{3})\]/);
-      const status = statusMatch ? parseInt(statusMatch[1]) : 500;
-      connectionManager.reportError(activeKey, status);
       throw new Error("Failed to refine content: " + e.message);
+  }
+};
+
+export const deepenNoteContent = async (
+  config: GenerationConfig,
+  currentContent: string,
+  instruction: string,
+  files: UploadedFile[],
+  additionalContexts?: Record<string, string>
+): Promise<string> => {
+  const ai = getAIClient(config);
+  const modelName = config.model.includes('gemini') ? config.model : 'gemini-3-flash-preview';
+
+  let contextString = "";
+  if (additionalContexts && Object.keys(additionalContexts).length > 0) {
+      contextString = "\n\n*** ADDITIONAL REFERENCE CONTEXT ***\n";
+      Object.entries(additionalContexts).forEach(([id, content]) => {
+          contextString += `\n--- SOURCE: ${id} ---\n${content.substring(0, 5000)}\n`;
+      });
+  }
+
+  const prompt = `
+  ROLE: Expert Medical Editor & Professor.
+  TASK: DEEPEN and ENRICH the existing Medical Note using the provided context materials.
+
+  USER INSTRUCTION: "${instruction || 'Deepen the note using the provided context.'}"
+
+  RULES FOR DEEPENING:
+  1. DO NOT DELETE OR SUMMARIZE existing information. Your job is to EXPAND it.
+  2. Integrate new facts, mechanisms, clinical correlations, and details from the Context into the existing structure.
+  3. If the Context contains new relevant topics not in the original note, add them as new sections at the end or where logically appropriate.
+  4. Maintain the original Markdown formatting (Headers, Lists, etc.).
+  5. The final output must be a comprehensive, combined note. DO NOT output a conversational response, ONLY the new Markdown note.
+  6. Write extensively. Do not be brief.
+
+  ORIGINAL CONTENT:
+  """
+  ${currentContent}
+  """
+  ${contextString}
+  `;
+
+  const parts: any[] = [{ text: prompt }];
+  if (files && files.length > 0) {
+      files.forEach(f => parts.push({ inlineData: { mimeType: f.mimeType, data: f.data } }));
+  }
+
+  try {
+      const response = await ai.models.generateContent({
+          model: modelName,
+          contents: { parts },
+          config: { temperature: 0.3, maxOutputTokens: 65536 }
+      });
+
+      const text = response.text || currentContent;
+      return processGeneratedNote(text);
+  } catch (e: any) {
+      console.error("Gemini Deepen Error", e);
+      throw new Error("Failed to deepen content: " + e.message);
   }
 };
 
@@ -430,7 +449,7 @@ export const generateChatResponse = async (
   currentNoteContent: string,
   userMessage: string
 ): Promise<string> => {
-  const { ai, activeKey } = getAIClient(config);
+  const ai = getAIClient(config);
   // Chat works best with Pro models usually, but Flash is faster for interaction
   const modelName = config.model.includes('gemini') ? config.model : 'gemini-3-flash-preview';
 
@@ -471,9 +490,82 @@ export const generateChatResponse = async (
       return result.text || "I couldn't generate a response.";
   } catch (e: any) {
       console.error("Chat Error", e);
-      const statusMatch = e.message?.match(/\[(\d{3})\]/);
-      const status = statusMatch ? parseInt(statusMatch[1]) : 500;
-      connectionManager.reportError(activeKey, status);
       return "Error generating chat response: " + e.message;
+  }
+};
+
+/* -------------------------------------------------------------------------- */
+/*                       ASSISTANT PANEL ENGINE                               */
+/* -------------------------------------------------------------------------- */
+
+export const generateAssistantResponse = async (
+  config: GenerationConfig,
+  currentContent: string,
+  history: ChatMessage[],
+  files: UploadedFile[],
+  additionalContexts?: Record<string, string>
+): Promise<string> => {
+  const ai = getAIClient(config);
+  const modelName = config.model.includes('gemini') ? config.model : 'gemini-3-flash-preview';
+
+  let contextString = "";
+  if (additionalContexts && Object.keys(additionalContexts).length > 0) {
+      contextString = "\n\n*** ADDITIONAL REFERENCE CONTEXT ***\n";
+      Object.entries(additionalContexts).forEach(([id, content]) => {
+          contextString += `\n--- SOURCE: ${id} ---\n${content.substring(0, 5000)}\n`;
+      });
+  }
+
+  const systemPrompt = `
+  ROLE: Intelligent Medical Assistant (Neuro-Sidekick).
+  CONTEXT: The user is working on a medical note.
+  CURRENT NOTE CONTENT:
+  """
+  ${currentContent.substring(0, 20000)} ... (truncated)
+  """
+  ${contextString}
+
+  INSTRUCTION:
+  - Provide a direct, high-quality response to the user's request.
+  - If asked to add content, write it in Markdown format matching the note's style.
+  - If asked to summarize, provide a concise summary.
+  - Do NOT repeat the user's prompt.
+  - Use the Additional Reference Context if relevant to answer the user's question.
+  `;
+
+  // Convert history to Gemini format
+  // System prompt goes to systemInstruction or first content part?
+  // For Gemini 1.5/Pro, systemInstruction is preferred in config.
+  // But here we are using generateContent (single turn) or chats.create (multi turn).
+  // Let's use chats.create for true history support.
+
+  try {
+      const chat = ai.chats.create({
+          model: modelName,
+          config: {
+              systemInstruction: systemPrompt,
+              temperature: 0.4,
+          },
+          history: history.slice(0, -1).map(msg => ({
+              role: msg.role,
+              parts: [{ text: msg.content }]
+          }))
+      });
+
+      const lastMessage = history[history.length - 1];
+      const parts: any[] = [{ text: lastMessage.content }];
+      
+      if (files && files.length > 0) {
+          files.forEach(f => parts.push({ inlineData: { mimeType: f.mimeType, data: f.data } }));
+      }
+
+      const result = await chat.sendMessage({ message: parts });
+      return result.text || "No response generated.";
+
+  } catch (e: any) {
+      console.error("Assistant Error", e);
+      // Fallback to single turn if chat fails (e.g. some models might have issues)
+      // Or just throw
+      throw new Error("Assistant failed: " + e.message);
   }
 };

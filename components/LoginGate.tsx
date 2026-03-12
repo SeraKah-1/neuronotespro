@@ -6,7 +6,7 @@ import { decryptNeuroKey } from '../utils/crypto';
 import AdminPanel from './AdminPanel';
 
 interface LoginGateProps {
-  onUnlock: (config: EncryptedPayload, keycardId: string) => void;
+  onUnlock: (config: EncryptedPayload) => void;
 }
 
 const ADMIN_HASH_ENV = (import.meta as any).env?.VITE_ADMIN_HASH || "neuro-admin-8821";
@@ -60,7 +60,7 @@ const LoginGate: React.FC<LoginGateProps> = ({ onUnlock }) => {
     try {
       await new Promise(r => setTimeout(r, 500));
       const payload = await decryptNeuroKey(pendingFile, pin);
-      onUnlock(payload, pendingFile.meta.issuedTo);
+      onUnlock(payload);
     } catch (err: any) {
       setError("Decryption Failed: Invalid PIN.");
       setLoading(false);

@@ -13,12 +13,3 @@ root.render(
     <App />
   </React.StrictMode>
 );
-
-// Register Service Worker for background reliability
-if ('serviceWorker' in navigator) {
-  window.addEventListener('load', () => {
-    navigator.serviceWorker.register('/service-worker.js')
-      .then(reg => console.log('NeuroNote SW Registered'))
-      .catch(err => console.error('SW Registration Failed', err));
-  });
-}

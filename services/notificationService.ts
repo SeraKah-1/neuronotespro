@@ -41,22 +41,15 @@ export class NotificationService {
   public send(title: string, body: string, tag?: string) {
     if (!this.hasPermission) return;
 
-    if (navigator.serviceWorker?.controller) {
-      navigator.serviceWorker.controller.postMessage({
-        type: 'SEND_NOTIFICATION',
-        payload: { title, body, tag }
+    try {
+      new Notification(title, {
+        body,
+        icon: 'https://lucide.dev/icons/brain-circuit.svg', // Fallback icon
+        tag: tag || 'neuronote-general',
+        silent: false
       });
-    } else {
-      try {
-        new Notification(title, {
-          body,
-          icon: 'https://lucide.dev/icons/brain-circuit.svg', // Fallback icon
-          tag: tag || 'neuronote-general',
-          silent: false
-        });
-      } catch (e) {
-        console.error("Notification Error:", e);
-      }
+    } catch (e) {
+      console.error("Notification Error:", e);
     }
   }
 
@@ -66,17 +59,8 @@ export class NotificationService {
       return;
     }
 
-    const delayMs = delayMinutes * 60 * 1000;
-
-    if (navigator.serviceWorker?.controller) {
-      navigator.serviceWorker.controller.postMessage({
-        type: 'SCHEDULE_REMINDER',
-        payload: { title, body, delayMs }
-      });
-    } else {
-      setTimeout(() => {
-        this.send(title, body, 'study-reminder');
-      }, delayMs);
-    }
+    setTimeout(() => {
+      this.send(title, body, 'study-reminder');
+    }, delayMinutes * 60 * 1000);
   }
 }
